@@ -1,0 +1,14 @@
+events:
+  - id: cmorph-india-20230709T0000Z
+    name: North-west India intense rainfall demonstration
+    region: Himachal Pradesh and nearby north-west India
+    observation_start: "2023-07-09T00:00:00Z"
+    observation_end: "2023-07-09T05:30:00Z"
+    sources:
+      - NOAA CPC CMORPH V0.x RAW 8km-30min
+    frame_count: 12
+    data_path: data/processed/cmorph_india_event.nc
+    limitations:
+      - One event is a demonstration and does not establish general forecast accuracy.
+      - CMORPH is a satellite precipitation estimate on an approximately 8 km grid with coarser effective resolution.
+      - No radar, lightning, satellite-channel, surface, or NWP observations are included in this event.
