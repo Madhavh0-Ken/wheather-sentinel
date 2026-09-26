@@ -1,0 +1,32 @@
+study_area:
+  name: Himachal Pradesh and nearby north-west India
+  bounds:
+    min_lat: 29.0
+    max_lat: 33.0
+    min_lon: 75.0
+    max_lon: 79.0
+
+data:
+  raw_dir: data/raw/cmorph
+  processed_event: data/processed/cmorph_india_event.nc
+  provenance_manifest: data/processed/cmorph_india_event.provenance.json
+  max_frames: 12
+
+detection:
+  threshold_mm_hr: 10.0
+  minimum_pixels: 2
+
+tracking:
+  max_distance_km: 100.0
+  max_gap_minutes: 90
+  max_assignment_cost: 1.5
+
+forecast:
+  lead_minutes: [30, 60, 120]
+  base_uncertainty_km: 12.0
+  uncertainty_growth_km_per_hour: 18.0
+
+target:
+  latitude: 31.1048
+  longitude: 77.1734
+
