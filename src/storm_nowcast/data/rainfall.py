@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bz2
+import gzip
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -85,7 +86,7 @@ def load_cmorph_file(
     *,
     grid_spec: CmorphGridSpec = CMORPH_GRID,
 ) -> xr.Dataset:
-    with bz2.open(path, "rb") as handle:
+    opener = gzip.open if Path(path).suffix.lower() == ".gz" else bz2.open
+    with opener(path, "rb") as handle:
         payload = handle.read()
     return parse_cmorph_bytes(payload, hour, bounds, grid_spec=grid_spec)
-

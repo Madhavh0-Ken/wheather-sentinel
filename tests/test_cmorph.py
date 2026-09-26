@@ -1,10 +1,11 @@
+import gzip
 from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
 from storm_nowcast.config import Bounds
-from storm_nowcast.data.rainfall import CmorphGridSpec, parse_cmorph_bytes
+from storm_nowcast.data.rainfall import CmorphGridSpec, load_cmorph_file, parse_cmorph_bytes
 
 
 TINY_GRID = CmorphGridSpec(
@@ -56,3 +57,19 @@ def test_parser_rejects_dateline_crossing_bounds_explicitly():
             Bounds.model_construct(min_lat=29, max_lat=31, min_lon=170, max_lon=-170),
             grid_spec=TINY_GRID,
         )
+
+
+def test_loader_reads_historical_gzip_archive(tmp_path):
+    values = np.arange(24, dtype="<f4").reshape(2, 3, 4)
+    path = tmp_path / "historical.gz"
+    with gzip.open(path, "wb") as handle:
+        handle.write(values.tobytes())
+
+    ds = load_cmorph_file(
+        path,
+        datetime(2023, 7, 9, 6, tzinfo=timezone.utc),
+        Bounds(min_lat=29, max_lat=31, min_lon=75, max_lon=77),
+        grid_spec=TINY_GRID,
+    )
+
+    assert ds.rain_rate.shape == (2, 3, 3)

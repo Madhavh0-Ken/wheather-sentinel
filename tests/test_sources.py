@@ -16,7 +16,7 @@ def test_cmorph_url_uses_official_noaa_archive_and_hour_name():
 
     assert url == (
         "https://ftp.cpc.ncep.noaa.gov/precip/CMORPH_V0.x/RAW/8km-30min/"
-        "2023/202307/CMORPH_V0.x_RAW_8km-30min_2023070906.bz2"
+        "2023/202307/CMORPH_V0.x_RAW_8km-30min_2023070906.gz"
     )
 
 

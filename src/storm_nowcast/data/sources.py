@@ -22,9 +22,10 @@ class CmorphSource:
         if timestamp.tzinfo is None:
             raise ValueError("CMORPH timestamps must be timezone-aware")
         utc = timestamp.astimezone(timezone.utc)
+        extension = "gz" if utc.year <= 2025 else "bz2"
         return (
             f"{self.base_url}/{utc:%Y}/{utc:%Y%m}/"
-            f"CMORPH_V0.x_RAW_8km-30min_{utc:%Y%m%d%H}.bz2"
+            f"CMORPH_V0.x_RAW_8km-30min_{utc:%Y%m%d%H}.{extension}"
         )
 
     def status(self) -> SourceStatus:
@@ -82,4 +83,3 @@ class ImdStationSource:
             manual_file_required=True,
             message="Official adapter ready; provide an official IMD station file.",
         )
-

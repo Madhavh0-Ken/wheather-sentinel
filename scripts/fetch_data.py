@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from storm_nowcast.data.download import download_file
 from storm_nowcast.data.sources import CmorphSource

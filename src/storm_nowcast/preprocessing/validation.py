@@ -13,7 +13,11 @@ def validate_weather_dataset(dataset: xr.Dataset) -> xr.Dataset:
         if coordinate not in dataset.coords:
             raise ValueError(f"Dataset is missing {coordinate} coordinate")
         values = dataset[coordinate].values
-        if len(values) > 1 and not np.all(np.diff(values) > 0):
+        if np.issubdtype(values.dtype, np.datetime64):
+            ascending = np.all(np.diff(values) > np.timedelta64(0, "ns"))
+        else:
+            ascending = np.all(np.diff(values) > 0)
+        if len(values) > 1 and not ascending:
             raise ValueError(f"{coordinate} coordinate must be strictly ascending")
     if dataset.rain_rate.dims != ("time", "latitude", "longitude"):
         raise ValueError("rain_rate dimensions must be time, latitude, longitude")
@@ -21,4 +25,3 @@ def validate_weather_dataset(dataset: xr.Dataset) -> xr.Dataset:
     if not np.array_equal(dataset.missing_mask.values.astype(bool), actual_missing):
         raise ValueError("missing_mask must exactly identify invalid rainfall observations")
     return dataset
-
