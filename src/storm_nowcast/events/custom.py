@@ -4,8 +4,10 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from pyproj import Geod
 
 from storm_nowcast.config import Bounds
@@ -54,6 +56,56 @@ class CustomEventRequest(BaseModel):
     @property
     def expected_frame_count(self) -> int:
         return int((self.end_time - self.start_time) / HALF_HOUR) + 1
+
+
+class CustomEventManifest(BaseModel):
+    """Versioned ownership and integrity envelope for a prepared custom event."""
+
+    schema_version: Literal[1] = 1
+    kind: Literal["custom"] = "custom"
+    event_id: str
+    display_name: str
+    bounding_box: Bounds
+    start_time: datetime
+    end_time: datetime
+    expected_frame_count: int = Field(gt=0)
+    frame_count: int = Field(gt=0)
+    provider: str
+    source_product: str
+    native_resolution: str
+    created_at: datetime
+    event_file: str = "event.nc"
+    provenance_file: str = "provenance.json"
+    event_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provenance_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stored_bytes: int = Field(ge=0)
+    analysis_ready: bool
+    analysis_summary: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+    _utc_times = field_validator("start_time", "end_time", "created_at", mode="before")(
+        lambda value: _as_utc(value, "manifest timestamp")
+    )
+
+
+class EventLibraryRecord(BaseModel):
+    event_id: str
+    display_name: str
+    kind: Literal["builtin", "custom"]
+    data_path: Path
+    manifest_path: Path | None = None
+    ready: bool
+    start_time: datetime
+    end_time: datetime
+    frame_count: int = Field(gt=0)
+    stored_bytes: int = Field(default=0, ge=0)
+    bounding_box: Bounds | None = None
+    analysis_ready: bool = True
+
+    _utc_times = field_validator("start_time", "end_time", mode="before")(
+        lambda value: _as_utc(value, "event timestamp")
+    )
 
 
 def _error(code: EventErrorCode, message: str, **details: object) -> EventOperationError:
@@ -133,7 +185,16 @@ def bounds_from_center(
     return _validate_bounds_values(min_lat, max_lat, min_lon, max_lon)
 
 
-def _as_utc(value: datetime, field: str) -> datetime:
+def _as_utc(value: datetime | str, field: str) -> datetime:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise _error(
+                EventErrorCode.INVALID_TIME_WINDOW,
+                f"{field} must be a valid UTC timestamp.",
+                field=field,
+            ) from exc
     if value.tzinfo is None or value.utcoffset() is None:
         raise _error(
             EventErrorCode.INVALID_TIME_WINDOW,
