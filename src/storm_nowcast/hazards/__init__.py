@@ -1,0 +1,2 @@
+"""Transparent prototype hazard indicators."""
+
