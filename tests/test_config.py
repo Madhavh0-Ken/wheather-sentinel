@@ -36,6 +36,12 @@ def test_yaml_overrides_nested_bounds(tmp_path: Path):
     assert settings.data.processed_event.name == "cmorph_india_event.nc"
 
 
+def test_environment_overrides_yaml_for_nested_values(monkeypatch):
+    monkeypatch.setenv("STORM_NOWCAST_DATA__MAX_FRAMES", "20")
+
+    assert load_settings().data.max_frames == 20
+
+
 @pytest.mark.parametrize(
     "values",
     [

@@ -12,6 +12,28 @@ data:
   provenance_manifest: data/processed/cmorph_india_event.provenance.json
   max_frames: 12
 
+manual_data:
+  mosdac_satellite_dir: data/manual/mosdac_satellite
+  imd_radar_dir: data/manual/imd_radar
+  imd_lightning_dir: data/manual/imd_lightning
+  imd_surface_dir: data/manual/imd_surface
+  nwp_dir: data/manual/nwp
+
+features:
+  satellite: false
+  radar: false
+  lightning: false
+  surface: false
+  nwp: false
+  optical_flow: false
+  live_mode: false
+  alerts: true
+  api: true
+
+analysis_grid:
+  resolution_km: 3.0
+  temporal_tolerance_minutes: 15
+
 detection:
   threshold_mm_hr: 10.0
   minimum_pixels: 2
@@ -29,4 +51,3 @@ forecast:
 target:
   latitude: 31.1048
   longitude: 77.1734
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,31 @@ class DataConfig(BaseModel):
     max_frames: int = Field(default=12, ge=4, le=48)
 
 
+class ManualDataConfig(BaseModel):
+    mosdac_satellite_dir: Path = Path("data/manual/mosdac_satellite")
+    imd_radar_dir: Path = Path("data/manual/imd_radar")
+    imd_lightning_dir: Path = Path("data/manual/imd_lightning")
+    imd_surface_dir: Path = Path("data/manual/imd_surface")
+    nwp_dir: Path = Path("data/manual/nwp")
+
+
+class FeatureFlags(BaseModel):
+    satellite: bool = False
+    radar: bool = False
+    lightning: bool = False
+    surface: bool = False
+    nwp: bool = False
+    optical_flow: bool = False
+    live_mode: bool = False
+    alerts: bool = True
+    api: bool = True
+
+
+class AnalysisGridConfig(BaseModel):
+    resolution_km: float = Field(default=3.0, ge=1.0, le=25.0)
+    temporal_tolerance_minutes: int = Field(default=15, ge=0, le=180)
+
+
 class DetectionConfig(BaseModel):
     threshold_mm_hr: float = Field(default=10.0, ge=0)
     minimum_pixels: int = Field(default=2, ge=1)
@@ -74,6 +100,9 @@ class Settings(BaseSettings):
 
     study_area: StudyAreaConfig
     data: DataConfig = DataConfig()
+    manual_data: ManualDataConfig = ManualDataConfig()
+    features: FeatureFlags = FeatureFlags()
+    analysis_grid: AnalysisGridConfig = AnalysisGridConfig()
     detection: DetectionConfig = DetectionConfig()
     tracking: TrackingConfig = TrackingConfig()
     forecast: ForecastConfig = ForecastConfig()
@@ -90,10 +119,26 @@ def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _environment_overrides() -> dict[str, Any]:
+    prefix = "STORM_NOWCAST_"
+    result: dict[str, Any] = {}
+    for name, raw_value in os.environ.items():
+        if not name.startswith(prefix):
+            continue
+        keys = [part.lower() for part in name[len(prefix) :].split("__") if part]
+        if not keys:
+            continue
+        cursor = result
+        for key in keys[:-1]:
+            cursor = cursor.setdefault(key, {})
+        cursor[keys[-1]] = yaml.safe_load(raw_value)
+    return result
+
+
 def load_settings(path: Path | None = None) -> Settings:
     default_data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     if path is not None:
         override = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         default_data = _merge(default_data, override)
+    default_data = _merge(default_data, _environment_overrides())
     return Settings(**default_data)
-

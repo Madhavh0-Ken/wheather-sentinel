@@ -31,7 +31,8 @@ def test_optional_adapters_disclose_access_requirements():
     lightning = ImdLightningSource().status()
 
     assert mosdac.authentication_required is True
-    assert "Official adapter ready" in mosdac.message
+    assert mosdac.implemented is False
+    assert "not yet verified" in mosdac.message
     assert radar.manual_file_required is True
     assert lightning.manual_file_required is True
     assert not any(status.available for status in (mosdac, radar, lightning))

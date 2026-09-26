@@ -10,6 +10,8 @@ class SourceStatus(BaseModel):
     available: bool
     authentication_required: bool = False
     manual_file_required: bool = False
+    implemented: bool = False
+    data_path: str | None = None
     message: str
 
 
@@ -32,6 +34,7 @@ class CmorphSource:
         return SourceStatus(
             source=self.product,
             available=True,
+            implemented=True,
             message="Public official NOAA CPC download; no login required.",
         )
 
@@ -43,8 +46,8 @@ class MosdacSatelliteSource:
             available=False,
             authentication_required=True,
             message=(
-                "Official adapter ready; source data not bundled because authenticated "
-                "provider access is required."
+                "Product-specific loading is not yet verified; authenticated MOSDAC "
+                "access and an official file are required."
             ),
         )
 
@@ -56,8 +59,8 @@ class ImdRadarSource:
             available=False,
             manual_file_required=True,
             message=(
-                "Official adapter ready; source data not bundled because authenticated "
-                "provider access or an official user-supplied file is required."
+                "Product-specific loading is not yet verified; authenticated IMD access "
+                "or an official user-supplied file is required."
             ),
         )
 
@@ -69,8 +72,8 @@ class ImdLightningSource:
             available=False,
             manual_file_required=True,
             message=(
-                "Official adapter ready; source data not bundled because authenticated "
-                "provider access or an official user-supplied file is required."
+                "Product-specific loading is not yet verified; official IMD access or "
+                "an official user-supplied file is required."
             ),
         )
 
@@ -81,5 +84,5 @@ class ImdStationSource:
             source="India Meteorological Department surface observations",
             available=False,
             manual_file_required=True,
-            message="Official adapter ready; provide an official IMD station file.",
+            message="Loading is not yet verified; provide an official IMD station file.",
         )
