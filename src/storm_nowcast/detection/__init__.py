@@ -1,0 +1,2 @@
+"""Intense precipitation cell detection."""
+
