@@ -44,8 +44,10 @@ These counts are training-pair availability counts, not accuracy measurements.
 
 ## Current split and model status
 
-**TRAIN:** UNAVAILABLE  
-**VALIDATION:** UNAVAILABLE  
+**TRAIN:** UNAVAILABLE
+
+**VALIDATION:** UNAVAILABLE
+
 **TEST:** UNAVAILABLE
 
 Reason: one event cannot produce three independent event-separated partitions.

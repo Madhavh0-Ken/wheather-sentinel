@@ -39,6 +39,8 @@ def test_training_builder_writes_real_event_horizons_and_unavailable_split_manif
         encoding="utf-8",
     )
     output_dir = tmp_path / "training"
+    output_dir.mkdir()
+    (output_dir / "rain_rate_lead_360.nc").write_text("stale artifact", encoding="utf-8")
 
     result = subprocess.run(
         [

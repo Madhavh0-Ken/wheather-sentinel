@@ -77,10 +77,11 @@ def build_training_artifacts(
     horizons = build_horizon_datasets(event_datasets, variable=variable)
     artifacts: dict[str, str | None] = {}
     for lead, horizon in horizons.items():
+        artifact_path = output_dir / f"{variable}_lead_{lead:03d}.nc"
         if horizon.sample_count == 0:
+            artifact_path.unlink(missing_ok=True)
             artifacts[str(lead)] = None
             continue
-        artifact_path = output_dir / f"{variable}_lead_{lead:03d}.nc"
         horizon.to_xarray().to_netcdf(artifact_path, engine="h5netcdf")
         artifacts[str(lead)] = str(artifact_path)
 
