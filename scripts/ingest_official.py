@@ -14,7 +14,7 @@ from storm_nowcast.config import Bounds
 from storm_nowcast.data.lightning import load_imd_lightning_file
 from storm_nowcast.data.nwp import load_official_nwp_file
 from storm_nowcast.data.radar import load_imd_radar_file
-from storm_nowcast.data.satellite import load_mosdac_file
+from storm_nowcast.data.satellite import load_insat3dr_l1c_asia_mer, load_mosdac_file
 from storm_nowcast.data.stations import load_imd_station_file
 from storm_nowcast.models.sensors import SourceDescriptor, SpatialResolution
 
@@ -37,7 +37,18 @@ def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(
         description="Import a user-supplied authoritative weather file without guessing its variables."
     )
-    command.add_argument("--source", required=True, choices=("mosdac", "imd-radar", "imd-lightning", "imd-surface", "nwp"))
+    command.add_argument(
+        "--source",
+        required=True,
+        choices=(
+            "mosdac",
+            "mosdac-insat3dr-l1c",
+            "imd-radar",
+            "imd-lightning",
+            "imd-surface",
+            "nwp",
+        ),
+    )
     command.add_argument("--input", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--variable", action="append", default=[], help="Canonical grid variable=source variable")
@@ -59,7 +70,19 @@ def main() -> None:
     args = parser().parse_args()
     bounds = Bounds(min_lat=args.min_lat, max_lat=args.max_lat, min_lon=args.min_lon, max_lon=args.max_lon)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    if args.source in {"mosdac", "imd-radar", "nwp"}:
+    if args.source == "mosdac-insat3dr-l1c":
+        product = load_insat3dr_l1c_asia_mer(
+            args.input,
+            bounds=bounds,
+            confirmed_official_origin=True,
+        )
+        product.dataset.to_netcdf(args.output, engine="h5netcdf")
+        metadata = {
+            "asset": product.asset.model_dump(mode="json"),
+            "lineage": {name: item.model_dump(mode="json") for name, item in product.lineage.items()},
+            "temporal_support": product.temporal_support.model_dump(mode="json"),
+        }
+    elif args.source in {"mosdac", "imd-radar", "nwp"}:
         if not args.native_resolution_km:
             raise SystemExit("--native-resolution-km is required for gridded products")
         variable_map = parse_assignments(args.variable)

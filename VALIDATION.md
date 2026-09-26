@@ -22,6 +22,18 @@ These are demonstration calculations, not general accuracy estimates. One matche
 sample cannot establish forecast skill, and the event was selected for a useful
 movement demonstration rather than held out from model development.
 
+## Training-pair availability
+
+The causal dataset builder uses five exact history frames at T-120, T-90, T-60,
+T-30, and T. The same single event yields 7/6/4/2/0 input-target pairs at
++30/+60/+120/+180/+360 minutes. These are dataset availability counts, not forecast
+accuracy or independent validation samples.
+
+No learned-model split or score exists. The available corpus covers one event, one
+region, and the period 2023-07-09 00:00-05:30 UTC. At least three non-overlapping
+events are required to form whole-event train, validation, and test partitions;
+meaningful evaluation requires materially more independent events than that minimum.
+
 ## Automated verification scope
 
 The suite covers source URL construction, binary parsing, preprocessing, provenance,
@@ -41,4 +53,5 @@ fixtures; they are not presented as observational evidence.
   and uncertainty intervals with materially larger sample counts.
 - Verify every MOSDAC/IMD/NWP decoder against authorized source files and provider
   documentation before enabling it.
-
+- Keep training-pair counts separate from forecast-versus-observation metrics in all
+  reports and interfaces.

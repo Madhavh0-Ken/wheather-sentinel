@@ -43,6 +43,12 @@ API documentation is at <http://127.0.0.1:8000/docs>. Run all tests with:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
+Build causal training-data artifacts (this does not train a model):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_training_dataset.py
+```
+
 ## What works
 
 - Official NOAA CPC CMORPH download, checksum provenance, binary parsing, regional
@@ -57,20 +63,27 @@ API documentation is at <http://127.0.0.1:8000/docs>. Run all tests with:
   resolution-aware weather cube, evidence-bearing digital twins, sensor-gated
   initiation/lightning analytics, raster translation nowcasting, live polling,
   alert rules, and a read-only FastAPI layer.
+- Product-specific documented-schema ingestion for MOSDAC INSAT-3DR
+  `3RIMG_L1C_ASIA_MER`, including file-supplied TIR1/WV calibration LUTs,
+  Mercator geolocation, acquisition time, native resolution, and checksum provenance.
+- Horizon-specific T-120/T-90/T-60/T-30/T datasets with event-separated split and
+  train-only normalization contracts; the current one-event corpus remains unsuitable
+  for learned-model training.
 - Historical/live-mode UI. Live mode truthfully falls back because no live provider
   is configured in this build.
 
 ## What is not connected
 
-MOSDAC INSAT and IMD radar, lightning, and surface files require authorized access
-or an official user-supplied file. Their generic adapters are implemented but have
-not been verified against product-specific real files. NWP uses the same explicit
-manual-import contract and is also unverified. Hail, downburst, and learned 2–6 hour
-forecasting remain unavailable because authoritative labels and a multi-event
-training/validation corpus are absent.
+The product-specific MOSDAC INSAT reader is verified against the official published
+schema using synthetic test fixtures, but no authorized real INSAT file is present;
+it is therefore not reported as a connected real source. IMD radar, lightning, and
+surface files also require authorized official files and remain generic/unverified.
+NWP uses the same explicit manual-import contract and is also unverified. Hail,
+downburst, and learned 2–6 hour forecasting remain unavailable because authoritative
+labels and a multi-event training/validation corpus are absent.
 
 See [DATA_SOURCES.md](DATA_SOURCES.md), [PROJECT_STATUS.md](PROJECT_STATUS.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [MODEL_CARD.md](MODEL_CARD.md), and
-[VALIDATION.md](VALIDATION.md) for the exact evidence and limitations. The known-good
-CMORPH checkpoint is git commit `3d0a01a`.
-
+[VALIDATION.md](VALIDATION.md) for the exact evidence and limitations. See also
+[TRAINING_DATA.md](TRAINING_DATA.md) and [SENSOR_INTEGRATION.md](SENSOR_INTEGRATION.md).
+The known-good CMORPH checkpoint is git commit `3d0a01a`.

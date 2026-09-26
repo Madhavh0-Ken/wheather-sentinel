@@ -18,7 +18,7 @@ under `data/processed/`. These generated files are intentionally git-ignored.
 
 | Sensor/product family | Loader state | Required before it can be called verified |
 |---|---|---|
-| ISRO MOSDAC INSAT | Generic explicit CF-compatible NetCDF/HDF5 import; cooling/expansion derivation for suitable consecutive Kelvin fields | Authenticated MOSDAC access, official sample, explicit variable mapping, product-specific verification |
+| ISRO/SAC MOSDAC INSAT-3DR `3RIMG_L1C_ASIA_MER` | Product-specific documented-schema HDF reader for TIR1 and optional WV brightness temperature; generic explicit CF import also remains | Authenticated MOSDAC file and real-file verification |
 | IMD Doppler Weather Radar | Generic explicit CF-compatible NetCDF/HDF5 import | Authorized official file, variable mapping, native resolution, format verification |
 | IMD lightning | Explicit point CSV import and window-count analytics | Authorized official file and explicit time/latitude/longitude mapping |
 | IMD AWS/ARG surface | Explicit point CSV import | Authorized official file, explicit columns and units |
@@ -42,14 +42,29 @@ README in each `data/manual/*` directory for the required canonical variables. T
 command validates structure and provenance; it does not prove the provider supplied
 the file.
 
+### INSAT-3DR priority product
+
+The selected product is MOSDAC `3RIMG_L1C_ASIA_MER`, DOI
+`10.19038/SAC/10/3RIMG_L1C_ASIA_MER`: half-hourly INSAT-3DR Imager Level-1C data in
+Mercator projection for the Asian sector. Official references:
+
+- Product and constraints: <https://mosdac.gov.in/doi/164/>
+- HDF structure, channel names, calibration LUTs, acquisition metadata, and projection:
+  <https://www.mosdac.gov.in/docs/INSAT3D_Products.pdf>
+- Registration/access policy: <https://www.mosdac.gov.in/data-access-policy>
+
+The synchronized-event request is 2023-07-09 00:00-05:30 UTC. Expected portal files
+match `3RIMG_09JUL2023_HHmm_L1C_ASIA_MER*.h5` and belong in
+`data/manual/mosdac_satellite/`. See that directory's README for the exact portal
+steps and ingestion command. No password, token, or session cookie is stored.
+
 ## Authentication
 
-This repository contains no credentials and no login bypass. The current generic
-MOSDAC/IMD adapters ingest already-authorized local files; they do not automate SSO,
-ordering, or protected downloads. Obtain data through the provider's official access
-process, keep credentials outside the repository, and place only approved files in
-the relevant manual-data directory. Authentication absence never blocks the verified
-CMORPH replay.
+This repository contains no credentials and no login bypass. MOSDAC's official policy
+provides dataset access according to account profile; `3RIMG_L1C_ASIA_MER` is listed
+for registered researchers. The adapters ingest already-authorized local files and do
+not automate SSO, ordering, CAPTCHA, or protected downloads. Authentication absence
+never blocks the verified CMORPH replay.
 
 ## Resolution and synthetic-data policy
 
@@ -59,4 +74,3 @@ configurable 3 km analysis grid is an alignment surface only: it creates no 3 km
 observation claim. Point observations remain point tables until an explicit
 aggregation is requested. Synthetic arrays and events appear only in automated tests
 and are marked `is_synthetic=true` where the model supports that field.
-
