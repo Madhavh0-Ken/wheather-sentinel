@@ -175,3 +175,20 @@ def test_synthetic_event_requires_explicit_test_only_opt_in():
             {"event-a": _event("event-a", datetime(2023, 7, 9, tzinfo=timezone.utc))},
             variable="rain_rate",
         )
+
+
+def test_mixed_fixture_export_is_marked_synthetic_if_any_event_is_synthetic():
+    _, build, _, _ = _training_api()
+    base = datetime(2023, 7, 9, tzinfo=timezone.utc)
+    real_event = _event("real-event", base, frames=6)
+    real_event.attrs["is_synthetic"] = 0
+    synthetic_event = _event("synthetic-event", base + timedelta(days=2), frames=6)
+
+    horizon = build(
+        {"real-event": real_event, "synthetic-event": synthetic_event},
+        variable="rain_rate",
+        lead_minutes=(30,),
+        allow_synthetic=True,
+    )[30]
+
+    assert horizon.to_xarray().attrs["is_synthetic"] == 1

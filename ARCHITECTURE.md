@@ -37,6 +37,13 @@ The proven rainfall path remains the default. `ReplayPlayer.analyze` orchestrate
 `detect_cells`, `CellTracker.update`, `forecast_track`, risk scoring, and
 `calculate_eta`. New services wrap these public interfaces instead of replacing them.
 
+The offline training-data branch is separate from causal replay. It groups complete
+events first, then creates independent horizon datasets using exact in-event history
+and target timestamps. Whole-event chronological splitting occurs before any model
+fitting, and normalization may use training inputs only. With one available event,
+artifact generation is permitted but splitting, training, and learned-model scoring
+remain unavailable.
+
 ## Core contracts
 
 - `RawAsset` records path, size, SHA-256, provider/product, official URL, access
@@ -65,4 +72,3 @@ offline except for optional basemap tiles. FastAPI exposes `/health`, `/sources`
 `/events`, `/storms`, `/storms/{id}`, `/nowcast`, `/hazards`, `/alerts`, and
 `/evaluation`. Analysis endpoints return HTTP 503 with a preparation command when
 event data is absent.
-

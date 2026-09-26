@@ -227,7 +227,7 @@ def build_horizon_datasets(
             samples=tuple(sample_lists[lead]),
             spatial_dims=expected_dims,
             spatial_coordinates=expected_coordinates,
-            is_synthetic=all(event_synthetic_states),
+            is_synthetic=any(event_synthetic_states),
         )
     return output
 

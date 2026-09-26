@@ -67,6 +67,11 @@ All seven delivery stages above now have working contracts and automated tests.
 CMORPH remains the only connected and real-data-verified source. Generic explicit
 local-file adapters, the weather cube, multi-sensor twins, gated analytics, raster
 translation nowcasting, live polling, alert rules, FastAPI, and dashboard availability
-panels are implemented. Product-specific MOSDAC/IMD/NWP verification, operational
-live feeds, hail/downburst models, and trained 2–6 hour forecasting remain blocked by
-authorized real files, labels, and a multi-event validation corpus.
+panels are implemented. The MOSDAC INSAT-3DR L1C reader is product-specific and
+schema-tested, but still requires an authorized real file before it can be marked
+connected. A leakage-safe event-separated training-data builder now produces the
+available per-horizon artifacts from the real CMORPH event; the one-event corpus does
+not permit train/validation/test splitting or learned-model accuracy claims.
+Product-specific IMD/NWP verification, operational live feeds, hail/downburst models,
+and trained 2–6 hour forecasting remain blocked by authorized real files, labels, and
+a multi-event validation corpus.
