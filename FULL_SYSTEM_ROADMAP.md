@@ -60,3 +60,13 @@ Only genuine later observations may produce performance metrics. Synthetic fixtu
 are test-only and carry `is_synthetic=true`. The one cached event is a demonstration,
 not a general validation dataset. Resampling never changes the stated physical source
 resolution.
+
+## Implemented extension status
+
+All seven delivery stages above now have working contracts and automated tests.
+CMORPH remains the only connected and real-data-verified source. Generic explicit
+local-file adapters, the weather cube, multi-sensor twins, gated analytics, raster
+translation nowcasting, live polling, alert rules, FastAPI, and dashboard availability
+panels are implemented. Product-specific MOSDAC/IMD/NWP verification, operational
+live feeds, hail/downburst models, and trained 2–6 hour forecasting remain blocked by
+authorized real files, labels, and a multi-event validation corpus.
