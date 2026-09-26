@@ -263,12 +263,12 @@ def load_insat3dr_l1c_asia_mer(
             "provider": INSAT3DR_L1C_ASIA_MER_DESCRIPTOR.provider,
             "product": INSAT3DR_L1C_ASIA_MER_DESCRIPTOR.product,
             "source_sha256": asset.sha256,
-            "is_synthetic": is_synthetic,
+            "is_synthetic": int(is_synthetic),
             "crs": "EPSG:4326",
             "native_crs": native_crs,
             "product_creation_time": product_creation_time,
             "format_contract": "MOSDAC INSAT-3D Data Products Format Document v1.1",
-            "real_file_verified": False,
+            "verification_status": "documented schema; authorized real-file verification pending",
         }
     )
     return IngestedProduct(

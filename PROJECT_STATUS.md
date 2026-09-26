@@ -2,8 +2,9 @@
 
 Status date: 2026-09-26. Protected fallback: git commit `3d0a01a`.
 
-Latest verification in this checkout: **91 tests passed, 0 failed**; cached CMORPH
-preparation, Streamlit health, and every documented FastAPI route passed smoke tests.
+Latest verification in this checkout: **98 tests passed, 0 failed**; cached CMORPH
+preparation and a fresh Streamlit health check passed. FastAPI route tests are part
+of the complete suite.
 
 | Capability | Status | Qualification |
 |---|---|---|
@@ -16,7 +17,8 @@ preparation, Streamlit health, and every documented FastAPI route passed smoke t
 | Prototype Extreme Rain Risk | Working heuristic | Uncalibrated and not cloudburst detection |
 | Real-event evaluation | Working where observations exist | One sample each at +30 and +60 for the default analysis cut; +120 insufficient |
 | Multi-sensor source/provenance contracts | Implemented and tested | Typed metadata and explicit missing states |
-| MOSDAC/IMD/NWP local-file adapters | Implemented, not real-data verified | Official authenticated or user-supplied samples are the blocker |
+| MOSDAC INSAT-3DR L1C reader | Product-specific code and schema tests complete; real-file verification blocked | `3RIMG_L1C_ASIA_MER`; authenticated file required |
+| Generic MOSDAC/IMD/NWP local-file adapters | Implemented, not real-data verified | Official authenticated or user-supplied samples are the blocker |
 | Resolution-aware weather cube | Implemented and tested | Missing masks and lineage; no silent imputation |
 | Multi-sensor digital twin | Implemented and tested | Current real event has rainfall evidence only |
 | Convective Initiation Score | Gated | Unavailable with CMORPH alone; requires precursor evidence |
@@ -54,13 +56,14 @@ StormNowcast/
 
 ## Next data-based work
 
-1. Obtain one authorized MOSDAC INSAT file and one authorized IMD radar/lightning
-   sample with metadata documentation.
-2. Add product-specific decoding fixtures derived from those files without committing
-   restricted data.
-3. Assemble multiple independent Indian rainfall events and evaluate by event-grouped
+1. Download the requested authorized MOSDAC `3RIMG_L1C_ASIA_MER` files for
+   2023-07-09 00:00-05:30 UTC and run the product-specific importer.
+2. Obtain one authorized IMD radar/lightning sample with metadata documentation.
+3. Compare decoded INSAT metadata/ranges against the authorized file and retain only
+   non-restricted structural fixtures.
+4. Assemble multiple independent Indian rainfall events and evaluate by event-grouped
    chronological splits.
-4. Enable raster nowcasting on the real replay only after its field mapping and
+5. Enable raster nowcasting on the real replay only after its field mapping and
    evaluation are demonstrated.
-5. Consider learned hail/downburst or 2–6 hour models only after authoritative labels
+6. Consider learned hail/downburst or 2–6 hour models only after authoritative labels
    and environmental predictors exist.
