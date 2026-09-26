@@ -27,7 +27,13 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--start", type=str, required=True, help="Inclusive timezone-aware UTC timestamp")
     command.add_argument("--end", type=str, required=True, help="Inclusive timezone-aware UTC timestamp")
     command.add_argument("--name")
-    command.add_argument("--offline", action="store_true", help="Require validated local source files")
+    command.add_argument(
+        "--offline",
+        "--no-download",
+        dest="offline",
+        action="store_true",
+        help="Require validated local source files",
+    )
     command.add_argument("--config", type=Path)
     command.add_argument("--catalog", type=Path, default=PROJECT_ROOT / "configs" / "events.yaml")
     command.add_argument("--cache-root", type=Path, default=PROJECT_ROOT / "data" / "raw" / "cmorph")

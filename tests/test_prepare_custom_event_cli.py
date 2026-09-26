@@ -13,7 +13,7 @@ def test_cli_delegates_explicit_region_and_window_to_builder(tmp_path, capsys):
             "--min-lat", str(request.min_lat), "--max-lat", str(request.max_lat),
             "--min-lon", str(request.min_lon), "--max-lon", str(request.max_lon),
             "--start", request.start_time.isoformat(), "--end", request.end_time.isoformat(),
-            "--name", "CLI event", "--offline",
+            "--name", "CLI event", "--no-download",
         ],
         builder=builder,
     )
