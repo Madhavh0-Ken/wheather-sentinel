@@ -46,3 +46,16 @@ def test_rainfall_grid_uses_one_unsmoothed_polygon_per_positive_source_cell():
     assert rainfall.type == "choroplethmap"
     assert len(rainfall.locations) == positive_cells
     assert "source grid cell" in rainfall.hovertemplate
+
+
+def test_rainfall_layer_can_be_hidden_without_hiding_derived_forecast_or_target():
+    settings = load_settings()
+    snapshot = ReplayPlayer(replay_dataset(), settings).analyze(2, target=(30.1, 75.3))
+
+    figure = build_map(snapshot, target=(30.1, 75.3), show_rainfall=False)
+    names = {trace.name for trace in figure.data}
+
+    assert not any(name.startswith("OBSERVED Â· Rain rate") for name in names)
+    assert any(name.startswith("DERIVED") for name in names)
+    assert any(name.startswith("FORECAST") for name in names)
+    assert any(name.startswith("TARGET") for name in names)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,8 @@ import streamlit as st
 import xarray as xr
 
 from storm_nowcast.config import load_settings
+from storm_nowcast.alerts.engine import AlertEngine, AlertRule
+from storm_nowcast.confidence.framework import estimate_forecast_confidence
 from storm_nowcast.data.provenance import read_manifest
 from storm_nowcast.data.sources import (
     CmorphSource,
@@ -18,8 +21,17 @@ from storm_nowcast.data.sources import (
     MosdacSatelliteSource,
 )
 from storm_nowcast.evaluation import evaluate_forecasts
+from storm_nowcast.events.catalog import load_event_catalog
+from storm_nowcast.hazards.registry import assess_hazards
+from storm_nowcast.initiation.scoring import score_convective_initiation
 from storm_nowcast.replay.player import ReplayPlayer
+from storm_nowcast.tracking.twin import build_multisensor_twin
 from storm_nowcast.visualization.layers import build_map
+from storm_nowcast.visualization.panels import (
+    hazard_rows,
+    resolve_operating_mode,
+    sensor_availability_rows,
+)
 
 
 def event_status_message(path: Path) -> str:
@@ -106,7 +118,10 @@ def _css() -> None:
           .st-key-replay_controls [data-testid="stHorizontalBlock"] {
             display:grid !important; grid-template-columns:60px 60px minmax(96px,1fr) 86px; gap:.25rem;
           }
-          .st-key-replay_controls [data-testid="column"] { width:100% !important; flex:none !important; }
+          .st-key-replay_controls [data-testid="stColumn"] { width:100% !important; flex:none !important; }
+          .st-key-replay_controls .stButton, .st-key-replay_controls .stButton button {
+            width:100% !important; min-width:0 !important;
+          }
           .st-key-replay_controls .stButton button { min-height:2.5rem; padding:.25rem .45rem; }
           .st-key-replay_controls button p, .st-key-replay_controls label p { font-size:.68rem !important; white-space:nowrap; }
           .cue { flex-direction:column; gap:.25rem; }
@@ -117,7 +132,34 @@ def _css() -> None:
     )
 
 
-def _source_sidebar() -> None:
+def _source_sidebar(settings) -> tuple[object, bool, Path]:
+    st.sidebar.header("Operations")
+    requested_mode = st.sidebar.radio(
+        "Operating mode", ("Historical Replay", "Live Mode"), horizontal=True
+    )
+    mode = resolve_operating_mode(
+        requested_mode,
+        live_enabled=settings.features.live_mode,
+        live_sources_available=False,
+    )
+    if mode.fallback:
+        st.sidebar.warning(mode.message, icon=None)
+    catalog_path = Path("configs/events.yaml")
+    event_path = settings.data.processed_event
+    if catalog_path.exists():
+        catalog = load_event_catalog(catalog_path)
+        labels = {event.id: event.name for event in catalog.events}
+        selected_event = st.sidebar.selectbox(
+            "Historical event", options=list(labels), format_func=lambda event_id: labels[event_id]
+        )
+        if selected_event:
+            event_path = catalog.get(selected_event).data_path
+    selected_layers = st.sidebar.multiselect(
+        "Observation layers",
+        options=("CMORPH rainfall",),
+        default=("CMORPH rainfall",),
+        help="Only layers backed by available observations can be enabled.",
+    )
     st.sidebar.header("Source readiness")
     for status in (
         CmorphSource().status(),
@@ -125,16 +167,17 @@ def _source_sidebar() -> None:
         ImdRadarSource().status(),
         ImdLightningSource().status(),
     ):
-        marker = "READY" if status.available else "INPUT REQUIRED"
+        marker = "VERIFIED REAL DATA" if status.verified_with_real_data else "OFFICIAL INPUT REQUIRED"
         st.sidebar.markdown(f"**{status.source}**  \n`{marker}`  \n{status.message}")
     st.sidebar.divider()
     st.sidebar.caption(
         "CMORPH is a satellite precipitation estimate—not radar. Grid spacing is approximately "
         "8 km; effective source resolution is coarser."
     )
+    return mode, "CMORPH rainfall" in selected_layers, event_path
 
 
-def _track_readout(track, eta) -> None:
+def _track_readout(track, eta, *, observation_time: datetime, target: tuple[float, float]) -> None:
     direction = "Unavailable" if track.bearing_deg is None else f"{track.bearing_deg:.0f}°"
     trend = "Increasing" if track.intensity_trend_mm_hr_per_hour > 1 else (
         "Weakening" if track.intensity_trend_mm_hr_per_hour < -1 else "Steady"
@@ -161,19 +204,63 @@ def _track_readout(track, eta) -> None:
         """,
         unsafe_allow_html=True,
     )
+    twin = build_multisensor_twin(track, [])
+    confidence = estimate_forecast_confidence(twin, lead_minutes=30)
+    ci = score_convective_initiation({"rain_rate": track.current.max_intensity})
+    st.markdown(
+        f"""
+        <div class="readout">
+          <h3>Sensor evidence & evidence-quality estimate</h3>
+          <dl><dt>Available sensors</dt><dd>Rainfall 1 / 6</dd>
+          <dt>Evidence quality at +30 min</dt><dd>{confidence.label}</dd>
+          <dt>Estimate kind</dt><dd>Input-quality heuristic</dd>
+          <dt>Convective Initiation Score</dt><dd>Unavailable</dd></dl>
+          <p class="limitation">{ci.explanation}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("Hazard model availability"):
+        st.dataframe(pd.DataFrame(hazard_rows(track)), hide_index=True, width="stretch")
+        st.caption("Unavailable means required verified observations or labels are absent; it does not mean zero risk.")
+    alert_engine = AlertEngine(
+        [
+            AlertRule(
+                rule_id="prototype-extreme-rain-near-target",
+                hazard="EXTREME_RAIN",
+                risk_levels={"HIGH", "VERY HIGH"},
+                minimum_confidence="MODERATE",
+            )
+        ]
+    )
+    alerts = alert_engine.evaluate(
+        track_id=track.id,
+        target=f"{target[0]:.2f}, {target[1]:.2f}",
+        source_timestamp=observation_time,
+        hazards=assess_hazards(track),
+        eta=eta,
+        confidence=confidence.label,
+    )
+    with st.expander(f"Prototype alert feed Â· {len(alerts)} active"):
+        if alerts:
+            for alert in alerts:
+                st.warning(f"{alert.hazard}: {alert.risk} Â· {alert.explanation}", icon=None)
+        else:
+            st.caption("No prototype alert rule is triggered at this analysis cut. No message is sent externally.")
     st.progress(int(risk.score), text=" · ".join(risk.contributors))
     forecast_rows = [
         {
             "Lead": f"+{point.lead_minutes} min",
             "Valid UTC": point.valid_at.strftime("%H:%M"),
             "Heuristic radius": f"{point.uncertainty_km:.0f} km",
-            "Heuristic confidence": point.confidence,
+            "Track heuristic": point.confidence,
         }
         for point in track.forecasts
     ]
     st.dataframe(pd.DataFrame(forecast_rows), hide_index=True, width="stretch")
     st.caption(
-        "Radii and confidence labels are uncalibrated prototype heuristics, not statistical intervals or operational guidance."
+        "Evidence quality above evaluates sensor availability and track history. The per-lead track heuristic "
+        "is a separate motion-baseline label. Neither is calibrated or operational guidance."
     )
     arrival = eta.estimated_arrival.strftime("%Y-%m-%d %H:%M UTC") if eta.estimated_arrival else "Not issued"
     st.markdown(
@@ -195,9 +282,9 @@ def main() -> None:
     st.set_page_config(page_title="StormNowcast", page_icon="SN", layout="wide")
     _css()
     settings = load_settings()
-    _source_sidebar()
+    mode, show_rainfall, event_path = _source_sidebar(settings)
     st.title("StormNowcast")
-    mode_label, mode_class = observation_mode(settings.data.processed_event)
+    mode_label, mode_class = observation_mode(event_path)
     st.markdown(
         f"""
         <div class="status-mast">
@@ -209,12 +296,12 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    if not settings.data.processed_event.exists():
-        st.error(event_status_message(settings.data.processed_event), icon=None)
+    if not event_path.exists():
+        st.error(event_status_message(event_path), icon=None)
         st.code(".\\.venv\\Scripts\\python.exe scripts\\prepare_demo.py", language="powershell")
         return
 
-    dataset = load_event(str(settings.data.processed_event))
+    dataset = load_event(str(event_path))
     player = ReplayPlayer(dataset, settings)
     default_frame = max(0, player.frame_count - 3)
     if "frame_index" not in st.session_state:
@@ -236,7 +323,10 @@ def main() -> None:
             format="Frame %d",
         )
         st.session_state.frame_index = selected_frame
-        playing = control_d.toggle("Play replay", value=False)
+    playing = control_d.toggle("Play", value=False, help="Automatically advance the historical replay")
+
+    if mode.fallback:
+        st.info(mode.message, icon=None)
 
     if "target_lat" not in st.session_state:
         st.session_state.target_lat = float(settings.target.latitude)
@@ -256,7 +346,11 @@ def main() -> None:
 
     map_column, rail_column = st.columns([2.15, 1], gap="large")
     with map_column:
-        st.plotly_chart(build_map(snapshot, target), width="stretch", config={"displaylogo": False})
+        st.plotly_chart(
+            build_map(snapshot, target, show_rainfall=show_rainfall),
+            width="stretch",
+            config={"displaylogo": False},
+        )
         st.caption(
             "OBSERVED rainfall · DERIVED cell footprints/history · FORECAST extrapolation and increasing uncertainty. "
             "Basemap tiles may be unavailable offline; weather overlays and analytics remain functional."
@@ -273,9 +367,24 @@ def main() -> None:
             track_ids = [track.id for track in snapshot.tracks]
             selected_id = st.selectbox("Inspect Intense Precipitation Cell", track_ids)
             track = next(item for item in snapshot.tracks if item.id == selected_id)
-            _track_readout(track, snapshot.eta_by_track[track.id])
+            _track_readout(
+                track,
+                snapshot.eta_by_track[track.id],
+                observation_time=snapshot.timestamp,
+                target=target,
+            )
         else:
             st.info("No Intense Precipitation Cell meets the configured threshold in this frame.", icon=None)
+
+    with st.expander("Sensor evidence at this analysis cut Â· 1 available / 4 displayed"):
+        st.dataframe(
+            pd.DataFrame(sensor_availability_rows(snapshot.timestamp)),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Native and processed resolution are shown separately. Resampling a coarse source never creates finer physical observations."
+        )
 
     st.subheader("Forecast vs later observation")
     metrics = evaluate_forecasts(snapshot.tracks, player.all_tracks())

@@ -99,9 +99,15 @@ def _rainfall_grid_trace(snapshot: ReplaySnapshot) -> go.Choroplethmap:
     )
 
 
-def build_map(snapshot: ReplaySnapshot, target: tuple[float, float]) -> go.Figure:
+def build_map(
+    snapshot: ReplaySnapshot,
+    target: tuple[float, float],
+    *,
+    show_rainfall: bool = True,
+) -> go.Figure:
     figure = go.Figure()
-    figure.add_trace(_rainfall_grid_trace(snapshot))
+    if show_rainfall:
+        figure.add_trace(_rainfall_grid_trace(snapshot))
 
     for track in snapshot.tracks:
         history_lats = [item.centroid_lat for item in track.history]
