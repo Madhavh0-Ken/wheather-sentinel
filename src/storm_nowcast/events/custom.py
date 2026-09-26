@@ -81,6 +81,7 @@ class CustomEventManifest(BaseModel):
     stored_bytes: int = Field(ge=0)
     analysis_ready: bool
     analysis_summary: dict[str, Any] = Field(default_factory=dict)
+    source_files: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 

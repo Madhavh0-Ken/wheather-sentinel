@@ -84,11 +84,15 @@ class ReplayPlayer:
         enriched: list[StormCell] = []
         eta_by_track: dict[str, ETAResult] = {}
         for track in tracks:
-            forecasts = forecast_track(
-                track,
-                self.settings.forecast.lead_minutes,
-                base_uncertainty_km=self.settings.forecast.base_uncertainty_km,
-                uncertainty_growth_km_per_hour=self.settings.forecast.uncertainty_growth_km_per_hour,
+            forecasts = (
+                forecast_track(
+                    track,
+                    self.settings.forecast.lead_minutes,
+                    base_uncertainty_km=self.settings.forecast.base_uncertainty_km,
+                    uncertainty_growth_km_per_hour=self.settings.forecast.uncertainty_growth_km_per_hour,
+                )
+                if len(track.history) >= 2
+                else []
             )
             risk = score_extreme_rain_risk(track)
             updated = track.model_copy(update={"forecasts": forecasts, "risk": risk})
@@ -112,4 +116,3 @@ class ReplayPlayer:
             field.attrs["is_synthetic"] = bool(self.dataset.attrs.get("is_synthetic", False))
             tracker.update(detect_cells(field, timestamp, self.settings.detection), timestamp)
         return list(tracker.tracks.values())
-

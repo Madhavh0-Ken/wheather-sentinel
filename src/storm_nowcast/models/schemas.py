@@ -109,7 +109,7 @@ class StormCell(BaseModel):
 
 class ETAResult(BaseModel):
     approaches_target: bool
-    closest_distance_km: float = Field(ge=0)
+    closest_distance_km: float | None = Field(default=None, ge=0)
     closest_lead_minutes: int | None = None
     uncertainty_km: float | None = None
     estimated_arrival: datetime | None = None

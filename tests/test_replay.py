@@ -57,3 +57,16 @@ def test_replay_rejects_frame_outside_event():
     player = ReplayPlayer(replay_dataset(), load_settings())
     with pytest.raises(IndexError, match="frame index"):
         player.analyze(3, target=(30.1, 75.3))
+
+
+def test_single_observation_track_has_no_motion_forecast_or_eta_claim():
+    player = ReplayPlayer(replay_dataset(), load_settings())
+
+    snapshot = player.analyze(0, target=(30.1, 75.3))
+
+    assert len(snapshot.tracks[0].history) == 1
+    assert snapshot.tracks[0].forecasts == []
+    eta = snapshot.eta_by_track[snapshot.tracks[0].id]
+    assert eta.estimated_arrival is None
+    assert eta.closest_distance_km is None
+    assert "Insufficient temporal history" in eta.explanation
