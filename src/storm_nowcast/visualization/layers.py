@@ -6,6 +6,8 @@ from pyproj import Geod
 from shapely.geometry import shape
 
 from storm_nowcast.replay.player import ReplaySnapshot
+from storm_nowcast.config import Bounds
+from storm_nowcast.visualization.region import map_view
 
 
 WGS84 = Geod(ellps="WGS84")
@@ -104,12 +106,17 @@ def build_map(
     target: tuple[float, float],
     *,
     show_rainfall: bool = True,
+    event_id: str | None = None,
+    bounds: Bounds | None = None,
+    selected_track_id: str | None = None,
 ) -> go.Figure:
     figure = go.Figure()
     if show_rainfall:
         figure.add_trace(_rainfall_grid_trace(snapshot))
 
     for track in snapshot.tracks:
+        selected = selected_track_id is None or selected_track_id == track.id
+        emphasis = 1.0 if selected else 0.34
         history_lats = [item.centroid_lat for item in track.history]
         history_lons = [item.centroid_lon for item in track.history]
         figure.add_trace(
@@ -117,8 +124,9 @@ def build_map(
                 lat=history_lats,
                 lon=history_lons,
                 mode="lines+markers",
-                line={"color": DERIVED, "width": 3},
-                marker={"color": DERIVED, "size": 7},
+                line={"color": DERIVED, "width": 3.5 if selected else 1.4},
+                marker={"color": DERIVED, "size": 8 if selected else 5},
+                opacity=emphasis,
                 name=f"DERIVED · {track.id} history",
                 legendgroup="derived",
                 hovertemplate=f"DERIVED tracked history · {track.id}<extra></extra>",
@@ -132,7 +140,8 @@ def build_map(
                 mode="lines",
                 fill="toself",
                 fillcolor="rgba(246,183,60,0.13)",
-                line={"color": DERIVED, "width": 2},
+                line={"color": DERIVED, "width": 2.5 if selected else 1},
+                opacity=emphasis,
                 name=f"DERIVED · {track.id} footprint",
                 legendgroup="derived",
                 hovertemplate=(
@@ -147,6 +156,7 @@ def build_map(
                 lon=[track.current.centroid_lon],
                 mode="markers+text",
                 marker={"color": DERIVED, "size": 11},
+                opacity=emphasis,
                 text=[track.id],
                 textposition="top right",
                 textfont={"color": "#FFF1CC", "size": 12},
@@ -163,8 +173,9 @@ def build_map(
                 lat=forecast_lats,
                 lon=forecast_lons,
                 mode="lines+markers",
-                line={"color": FORECAST, "width": 3},
-                marker={"color": FORECAST, "size": 8},
+                line={"color": FORECAST, "width": 3.5 if selected else 1.4},
+                marker={"color": FORECAST, "size": 8 if selected else 5},
+                opacity=emphasis,
                 name=f"FORECAST · {track.id} track",
                 legendgroup="forecast",
                 hovertemplate="FORECAST · %{text}<extra></extra>",
@@ -183,6 +194,7 @@ def build_map(
                     fill="toself",
                     fillcolor="rgba(241,91,181,0.10)",
                     line={"color": "#FFD4EE", "width": 2},
+                    opacity=emphasis,
                     name=f"FORECAST · +{point.lead_minutes} min uncertainty",
                     legendgroup="forecast",
                     showlegend=False,
@@ -204,8 +216,14 @@ def build_map(
             hovertemplate="TARGET · Selected location<extra></extra>",
         )
     )
-    center_lat = float(np.mean(snapshot.rainfall.latitude.values))
-    center_lon = float(np.mean(snapshot.rainfall.longitude.values))
+    if bounds is None:
+        bounds = Bounds(
+            min_lat=float(np.min(snapshot.rainfall.latitude.values)),
+            max_lat=float(np.max(snapshot.rainfall.latitude.values)),
+            min_lon=float(np.min(snapshot.rainfall.longitude.values)),
+            max_lon=float(np.max(snapshot.rainfall.longitude.values)),
+        )
+    view = map_view(bounds)
     figure.update_layout(
         height=610,
         margin={"l": 0, "r": 0, "t": 42, "b": 0},
@@ -215,8 +233,7 @@ def build_map(
         showlegend=False,
         map={
             "style": "carto-darkmatter",
-            "center": {"lat": center_lat, "lon": center_lon},
-            "zoom": 6.0,
+            **view,
         },
         legend={
             "orientation": "h",
@@ -229,6 +246,6 @@ def build_map(
             "borderwidth": 1,
             "font": {"size": 11},
         },
-        uirevision="storm-nowcast-map",
+        uirevision=f"storm-nowcast-map:{event_id or 'default'}",
     )
     return figure
