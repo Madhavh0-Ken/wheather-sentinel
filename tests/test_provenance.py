@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from storm_nowcast.data.provenance import sha256_file, write_manifest
+from storm_nowcast.data.provenance import read_manifest, sha256_file, write_manifest
 from storm_nowcast.models.schemas import ProvenanceRecord
 
 
@@ -26,3 +26,4 @@ def test_checksum_and_manifest_preserve_exact_source_metadata(tmp_path):
     assert '"provider": "NOAA Climate Prediction Center"' in body
     assert record.sha256 == "ea3cd48cbecf05dd3fd2c30f37617e350bc285be4f4bdce9ebcad1f46530c66a"
     assert '"is_synthetic": false' in body
+    assert read_manifest(manifest) == [record]

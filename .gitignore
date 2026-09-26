@@ -2,11 +2,16 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
 .streamlit/secrets.toml
 .env
+.superpowers/
+.impeccable/review/
+.impeccable/app-brief-body.md
+.impeccable/capture_review.py
+.impeccable/check_ui.py
 data/raw/*
 data/cache/*
 data/processed/*
 data/demo/*
 !data/**/.gitkeep
-

@@ -6,7 +6,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def _as_utc(value: datetime) -> datetime:
+def _as_utc(value: datetime | str) -> datetime:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Timestamps must be timezone-aware")
     return value.astimezone(timezone.utc)
