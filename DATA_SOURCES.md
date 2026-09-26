@@ -14,6 +14,14 @@ The cached demonstration covers 2023-07-09 00:00–05:30 UTC and 29–33°N,
 under `data/raw/cmorph/`; the compact extracted event and provenance manifest are
 under `data/processed/`. These generated files are intentionally git-ignored.
 
+The configurable workflow uses the same official product for any supported,
+non-dateline-crossing rectangle inside the published latitude grid. A request is
+capped at 20 degrees by 20 degrees and an inclusive 24-hour UTC window. Cached raw
+files are shared across events and are reused only after compressed layout, checksum,
+official URL, and requested-crop parsing validation. Custom processed events live
+under `data/events/custom/<event_id>/`; deleting one never deletes the shared cache.
+See [CUSTOM_REGION_ANALYSIS.md](CUSTOM_REGION_ANALYSIS.md).
+
 ## Implemented import contracts awaiting official data
 
 | Sensor/product family | Loader state | Required before it can be called verified |

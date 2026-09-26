@@ -2,9 +2,10 @@
 
 Status date: 2026-09-26. Protected fallback: git commit `3d0a01a`.
 
-Latest verification in this checkout: **106 tests passed, 0 failed**; cached CMORPH
-preparation and the real-event training-artifact build passed. Streamlit health was
-checked after the final test run.
+Latest verification in this checkout: **160 tests passed, 0 failed, 1
+platform-dependent symlink test skipped** before final documentation verification.
+Built-in and offline custom-event smoke paths plus Streamlit/API health are part of
+the final handoff checklist.
 
 | Capability | Status | Qualification |
 |---|---|---|
@@ -27,10 +28,19 @@ checked after the final test run.
 | Event-separated training-data pipeline | ✅ COMPLETE | Real event yields 7/6/4/2/0 samples at +30/+60/+120/+180/+360 |
 | Live runner | 🟡 PARTIAL | Framework tested; no provider-specific live source configured |
 | Alert engine / JSON | ✅ COMPLETE | Prototype feed only; no external delivery |
-| Read-only FastAPI | ✅ COMPLETE | Eight analysis/source/event endpoint groups plus health |
+| FastAPI event operations | ✅ COMPLETE | Prepare/list/detail/delete plus event-scoped analysis; omitted ID preserves built-in default |
 | Hail model | 🔴 BLOCKED | No verified labels; absence is not reported as zero risk |
 | Downburst model | 🔴 BLOCKED | Verified gust/radar/report labels are absent |
 | Learned 2–6 hour forecast | 🔴 BLOCKED | One event cannot support train/validation/test and held-out evaluation |
+
+## Configurable region status
+
+- Configurable CMORPH regions: complete. Requests support center/size or explicit
+  bounds, with 20 by 20 degree and inclusive 24-hour caps (49 observations).
+- Custom-event repository: complete. Versioned manifests, checksums, locks, atomic
+  promotion, offline reopening, and ID-only safe deletion are verified.
+- FastAPI event operations: complete. Prepare/list/detail/delete and event-scoped
+  analysis preserve the built-in default when `event_id` is omitted.
 
 ## Repository map
 
@@ -41,9 +51,11 @@ StormNowcast/
 ├── data/
 │   ├── manual/                    Official user-supplied input landing areas
 │   ├── raw/                       Download cache (generated/ignored)
-│   └── processed/                 Compact replay and provenance (generated/ignored)
+│   ├── events/custom/             Atomic custom events (generated/ignored)
+│   └── processed/                 Compact built-in replay and provenance (generated/ignored)
 ├── scripts/
 │   ├── prepare_demo.py            Prepare/verify real CMORPH event
+│   ├── prepare_custom_event.py    Prepare bounded reusable CMORPH event
 │   ├── ingest_official.py         Explicit manual official-file import
 │   └── build_training_dataset.py  Build causal per-horizon artifacts
 ├── src/storm_nowcast/
@@ -53,7 +65,7 @@ StormNowcast/
 │   ├── detection/, tracking/      Cells, IDs, histories, twins
 │   ├── nowcast/, hazards/, eta/   Forecast and qualified impacts
 │   ├── replay/, services/, live/  Causal orchestration
-│   ├── alerts/, api/              Rules and read-only service
+│   ├── alerts/, api/              Rules and event-aware service
 │   └── visualization/             Map and status panels
 └── tests/                         Unit, integration, regression, UI, and API tests
 ```

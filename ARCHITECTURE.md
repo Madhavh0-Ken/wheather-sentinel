@@ -37,6 +37,18 @@ The proven rainfall path remains the default. `ReplayPlayer.analyze` orchestrate
 `detect_cells`, `CellTracker.update`, `forecast_track`, risk scoring, and
 `calculate_eta`. New services wrap these public interfaces instead of replacing them.
 
+Custom CMORPH preparation adds one shared boundary before replay:
+
+```text
+CustomEventRequest -> validate UTC/bounds -> deterministic event ID -> event lock
+  -> validated shared NOAA cache -> exact inclusive crop -> temporary event
+  -> replay-based readiness summary -> checksum/schema verification
+  -> atomic promotion -> EventRepository -> Streamlit / FastAPI / CLI
+```
+
+The builder is synchronous for this MVP but contains no Streamlit or HTTP logic, so
+it can later run in a background worker without changing the data pipeline.
+
 The offline training-data branch is separate from causal replay. It groups complete
 events first, then creates independent horizon datasets using exact in-event history
 and target timestamps. Whole-event chronological splitting occurs before any model
@@ -55,6 +67,10 @@ remain unavailable.
 - `MultiSensorStormCell` adds evidence histories, availability, lineage, and derived
   acceleration to the backward-compatible rainfall track.
 - `AnalysisSnapshot` is the shared transport-neutral output for UI and API.
+- `CustomEventManifest` is the versioned ownership/integrity envelope for a custom
+  `event.nc` and `provenance.json` pair.
+- `EventRepository` is the only path-resolution, readiness, promotion, and deletion
+  boundary for custom events.
 
 ## Failure boundaries
 
@@ -65,10 +81,18 @@ bound, and reports cached-stale or unavailable status. API imports do not downlo
 data. Historical analysis at time T never accesses observations after T; only the
 separate evaluator compares forecasts with later truth.
 
+Custom-event locks contain owner and UTC acquisition metadata and allow bounded
+stale recovery. Every failed builder transaction removes its owned temporary
+directory and releases only its own lock. Existing custom events are revalidated by
+schema, structure, timestamps, and checksums before reuse. Deletion resolves a
+validated event ID directly beneath the custom root and cannot target built-in or
+shared raw data.
+
 ## Interfaces
 
-The Streamlit application reads the compact event from disk and remains useful
-offline except for optional basemap tiles. FastAPI exposes `/health`, `/sources`,
-`/events`, `/storms`, `/storms/{id}`, `/nowcast`, `/hazards`, `/alerts`, and
-`/evaluation`. Analysis endpoints return HTTP 503 with a preparation command when
-event data is absent.
+The Streamlit application reads compact events from disk and remains useful offline
+except for optional basemap tiles. FastAPI exposes `/health`, `/sources`, event
+prepare/list/detail/delete routes, and `/storms`, `/storms/{id}`, `/nowcast`,
+`/hazards`, `/alerts`, and `/evaluation`. Analysis routes accept optional `event_id`;
+omission preserves the built-in default. Domain failures share stable codes across
+the dashboard and API.
