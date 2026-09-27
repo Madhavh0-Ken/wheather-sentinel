@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import bz2
 import gzip
+import hashlib
 import json
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,12 +16,19 @@ import xarray as xr
 from storm_nowcast.config import Bounds
 from storm_nowcast.data.download import DownloadResult, download_file
 from storm_nowcast.data.provenance import sha256_file
-from storm_nowcast.data.rainfall import CMORPH_GRID, CmorphGridSpec, load_cmorph_file
+from storm_nowcast.data.rainfall import (
+    CMORPH_GRID,
+    CmorphCropError,
+    CmorphGridSpec,
+    load_cmorph_file,
+)
 from storm_nowcast.data.sources import CmorphSource
 from storm_nowcast.events.errors import EventErrorCode, EventOperationError
+from storm_nowcast.events.locking import EventBuildLock
 
 
 Downloader = Callable[..., DownloadResult]
+CACHE_LOCK_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +42,7 @@ class CachedCmorphAsset:
     downloaded: bool
     reused: bool
     dataset: xr.Dataset
+    acquisition_evidence: str = "cache metadata"
 
 
 def validate_cmorph_archive(
@@ -80,7 +91,10 @@ class CmorphCache:
 
     @staticmethod
     def _parse_time(value: str) -> datetime:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Cached CMORPH acquisition time must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
 
     def _write_metadata(
         self,
@@ -103,9 +117,14 @@ class CmorphCache:
             "validated_at": validated_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "acquisition_evidence": acquisition_evidence,
         }
-        temporary = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(metadata_path)
+        temporary = metadata_path.with_name(
+            f".{metadata_path.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.replace(metadata_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _validated_asset(
         self,
@@ -124,6 +143,10 @@ class CmorphCache:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             if metadata.get("official_url") != official_url:
                 raise ValueError("Cached CMORPH metadata official URL does not match")
+            if metadata.get("source_filename") != path.name:
+                raise ValueError("Cached CMORPH metadata source filename does not match")
+            if metadata.get("compressed_byte_count") != path.stat().st_size:
+                raise ValueError("Cached CMORPH metadata byte count does not match")
             if metadata.get("sha256") != checksum:
                 raise ValueError("Cached CMORPH checksum does not match metadata")
             acquired_at = self._parse_time(metadata["acquired_at"])
@@ -135,15 +158,34 @@ class CmorphCache:
             else:
                 acquired_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
                 acquisition_evidence = "legacy cache file timestamp adopted after full validation"
-        dataset = load_cmorph_file(path, hour, bounds, grid_spec=self.grid_spec)
-        self._write_metadata(
-            path,
-            official_url=official_url,
-            checksum=checksum,
-            acquired_at=acquired_at,
-            validated_at=validated_at,
-            acquisition_evidence=acquisition_evidence,
-        )
+        try:
+            dataset = load_cmorph_file(path, hour, bounds, grid_spec=self.grid_spec)
+        except CmorphCropError as exc:
+            raise EventOperationError(
+                EventErrorCode.INVALID_BOUNDS,
+                "The requested region does not contain a native CMORPH grid cell.",
+                details={
+                    "min_lat": bounds.min_lat,
+                    "max_lat": bounds.max_lat,
+                    "min_lon": bounds.min_lon,
+                    "max_lon": bounds.max_lon,
+                },
+            ) from exc
+        try:
+            self._write_metadata(
+                path,
+                official_url=official_url,
+                checksum=checksum,
+                acquired_at=acquired_at,
+                validated_at=validated_at,
+                acquisition_evidence=acquisition_evidence,
+            )
+        except OSError as exc:
+            raise EventOperationError(
+                EventErrorCode.EVENT_STORAGE_FAILED,
+                "CMORPH cache metadata could not be stored safely.",
+                details={"path": str(self._metadata_path(path)), "official_url": official_url},
+            ) from exc
         return CachedCmorphAsset(
             path=path,
             official_url=official_url,
@@ -154,6 +196,7 @@ class CmorphCache:
             downloaded=downloaded,
             reused=not downloaded,
             dataset=dataset,
+            acquisition_evidence=acquisition_evidence,
         )
 
     def _remove_invalid_entry(self, path: Path) -> None:
@@ -170,6 +213,40 @@ class CmorphCache:
     ) -> CachedCmorphAsset:
         official_url = self.source.build_url(hour)
         path = self.root / Path(official_url).name
+        lock_id = f"cmorph-cache-{hashlib.sha256(path.name.encode('utf-8')).hexdigest()[:16]}"
+        lock = EventBuildLock(self.root / ".locks", lock_id)
+        deadline = time.monotonic() + CACHE_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                lock.acquire()
+                break
+            except EventOperationError as exc:
+                if (
+                    exc.code != EventErrorCode.EVENT_BUILD_IN_PROGRESS
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+                time.sleep(0.05)
+        try:
+            return self._get_locked(
+                hour,
+                bounds,
+                official_url=official_url,
+                path=path,
+                allow_download=allow_download,
+            )
+        finally:
+            lock.release()
+
+    def _get_locked(
+        self,
+        hour: datetime,
+        bounds: Bounds,
+        *,
+        official_url: str,
+        path: Path,
+        allow_download: bool,
+    ) -> CachedCmorphAsset:
         cached_error: Exception | None = None
         if path.exists():
             try:
@@ -180,6 +257,8 @@ class CmorphCache:
                     official_url=official_url,
                     downloaded=False,
                 )
+            except EventOperationError:
+                raise
             except Exception as exc:
                 cached_error = exc
                 if not allow_download:
@@ -212,6 +291,8 @@ class CmorphCache:
                     official_url=official_url,
                     downloaded=True,
                 )
+            except EventOperationError:
+                raise
             except Exception as exc:
                 last_validation_error = exc
                 self._remove_invalid_entry(path)

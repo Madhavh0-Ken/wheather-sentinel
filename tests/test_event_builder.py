@@ -170,3 +170,26 @@ def test_builder_failure_always_cleans_temporary_directory_and_owned_lock(
 
     assert not list(custom_root.glob(".tmp-*"))
     assert not list((custom_root / ".locks").glob("*.lock"))
+
+
+def test_cleanup_sharing_violation_still_releases_lock_and_returns_typed_error(
+    tmp_path, monkeypatch
+):
+    import storm_nowcast.events.builder as builder_module
+    from storm_nowcast.events.errors import EventErrorCode
+
+    builder, _, custom_root, cache = make_builder(tmp_path)
+    cache.fail = True
+    monkeypatch.setattr(
+        builder_module.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError("simulated OneDrive sharing violation")
+        ),
+    )
+
+    with pytest.raises(EventOperationError) as captured:
+        builder.prepare(event_request(), allow_download=False)
+
+    assert captured.value.code == EventErrorCode.EVENT_STORAGE_FAILED
+    assert not list((custom_root / ".locks").glob("*.lock"))

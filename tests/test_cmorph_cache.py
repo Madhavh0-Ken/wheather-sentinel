@@ -1,6 +1,7 @@
 import bz2
 import gzip
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,10 +67,122 @@ def test_valid_cache_is_reused_without_network_and_legacy_metadata_is_adopted(tm
     assert asset.reused is True
     assert asset.downloaded is False
     assert asset.sha256 == sha256_file(path)
+    assert "legacy cache" in asset.acquisition_evidence
     metadata = json.loads(path.with_suffix(".gz.meta.json").read_text(encoding="utf-8"))
     assert metadata["official_url"].endswith("2023070906.gz")
     assert metadata["sha256"] == asset.sha256
     assert "legacy cache" in metadata["acquisition_evidence"]
+
+
+def test_concurrent_reuse_of_one_hour_serializes_shared_metadata_write(tmp_path, monkeypatch):
+    from storm_nowcast.data.cmorph_cache import CmorphCache
+
+    path = _destination(tmp_path)
+    _write_archive(path)
+    first_metadata_write = threading.Event()
+    release_first = threading.Event()
+    active_writers = 0
+    overlap_observed = False
+    writer_guard = threading.Lock()
+    original_write_metadata = CmorphCache._write_metadata
+
+    def controlled_write_metadata(self, *args, **kwargs):
+        nonlocal active_writers, overlap_observed
+        with writer_guard:
+            active_writers += 1
+            overlap_observed = overlap_observed or active_writers > 1
+            current = active_writers
+        if current == 1:
+            first_metadata_write.set()
+            release_first.wait(timeout=1)
+        try:
+            return original_write_metadata(self, *args, **kwargs)
+        finally:
+            with writer_guard:
+                active_writers -= 1
+
+    monkeypatch.setattr(CmorphCache, "_write_metadata", controlled_write_metadata)
+    results = []
+    errors = []
+
+    def reuse():
+        try:
+            results.append(
+                _cache(tmp_path, lambda *_args, **_kwargs: None).get(
+                    HOUR, BOUNDS, allow_download=False
+                )
+            )
+        except Exception as exc:  # the assertion below reports the real cross-thread failure
+            errors.append(exc)
+
+    first = threading.Thread(target=reuse)
+    second = threading.Thread(target=reuse)
+    first.start()
+    assert first_metadata_write.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.2)
+    release_first.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert overlap_observed is False
+    assert not errors
+    assert len(results) == 2
+    assert all(asset.reused for asset in results)
+    metadata = json.loads(path.with_suffix(".gz.meta.json").read_text(encoding="utf-8"))
+    assert metadata["sha256"] == sha256_file(path)
+
+
+def test_empty_requested_crop_does_not_invalidate_valid_shared_archive(tmp_path):
+    from storm_nowcast.data.cmorph_cache import validate_cmorph_archive
+
+    path = _destination(tmp_path)
+    _write_archive(path)
+    between_grid_centers = Bounds(
+        min_lat=29.1,
+        max_lat=29.2,
+        min_lon=75.1,
+        max_lon=75.2,
+    )
+
+    with pytest.raises(EventOperationError) as captured:
+        _cache(tmp_path, lambda *_args, **_kwargs: None).get(
+            HOUR,
+            between_grid_centers,
+            allow_download=False,
+        )
+
+    assert captured.value.code == EventErrorCode.INVALID_BOUNDS
+    assert path.exists()
+    assert validate_cmorph_archive(path, grid_spec=TINY_GRID) == len(_payload())
+
+
+def test_metadata_promotion_failure_preserves_valid_archive_and_returns_storage_error(
+    tmp_path, monkeypatch
+):
+    from storm_nowcast.data.cmorph_cache import CmorphCache, validate_cmorph_archive
+
+    path = _destination(tmp_path)
+    _write_archive(path)
+    download_attempted = False
+
+    def forbidden_download(*_args, **_kwargs):
+        nonlocal download_attempted
+        download_attempted = True
+        raise AssertionError("metadata failure must not trigger a NOAA download")
+
+    def fail_metadata_write(*_args, **_kwargs):
+        raise PermissionError("simulated OneDrive sharing violation")
+
+    monkeypatch.setattr(CmorphCache, "_write_metadata", fail_metadata_write)
+
+    with pytest.raises(EventOperationError) as captured:
+        _cache(tmp_path, forbidden_download).get(HOUR, BOUNDS)
+
+    assert captured.value.code == EventErrorCode.EVENT_STORAGE_FAILED
+    assert download_attempted is False
+    assert path.exists()
+    assert validate_cmorph_archive(path, grid_spec=TINY_GRID) == len(_payload())
 
 
 @pytest.mark.parametrize("suffix", [".gz", ".bz2"])
@@ -129,6 +242,38 @@ def test_mismatched_sidecar_is_not_reused_and_official_file_is_redownloaded(tmp_
     assert asset.reused is False
     metadata = json.loads(path.with_suffix(".gz.meta.json").read_text(encoding="utf-8"))
     assert metadata["official_url"] == asset.official_url
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("source_filename", "different-hour.gz"),
+        ("compressed_byte_count", 1),
+        ("acquired_at", "2024-05-18T00:00:00"),
+    ],
+)
+def test_offline_sidecar_requires_matching_file_facts_and_aware_time(
+    tmp_path, field, invalid_value
+):
+    path = _destination(tmp_path)
+    _write_archive(path)
+    metadata = {
+        "official_url": "https://ftp.cpc.ncep.noaa.gov/precip/CMORPH_V0.x/RAW/8km-30min/2023/202307/CMORPH_V0.x_RAW_8km-30min_2023070906.gz",
+        "source_filename": path.name,
+        "compressed_byte_count": path.stat().st_size,
+        "sha256": sha256_file(path),
+        "acquired_at": "2024-05-18T00:00:00Z",
+    }
+    metadata[field] = invalid_value
+    path.with_suffix(".gz.meta.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(EventOperationError) as captured:
+        _cache(tmp_path, lambda *_args, **_kwargs: None).get(
+            HOUR, BOUNDS, allow_download=False
+        )
+
+    assert captured.value.code == EventErrorCode.NOAA_FILE_CORRUPT
+    assert path.exists()
 
 
 def test_invalid_download_is_retried_once_then_succeeds(tmp_path):

@@ -24,6 +24,8 @@ from storm_nowcast.data.sources import (
 from storm_nowcast.evaluation import evaluate_forecasts
 from storm_nowcast.events.builder import BuildStage, CmorphEventBuilder
 from storm_nowcast.events.custom import (
+    CMORPH_MAX_LAT,
+    CMORPH_MIN_LAT,
     CustomEventRequest,
     EventLibraryRecord,
     SizeUnit,
@@ -195,6 +197,9 @@ def _css() -> None:
 
 def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
     st.sidebar.header("Operations")
+    pending_workflow = st.session_state.pop("_pending_operating_workflow", None)
+    if pending_workflow is not None:
+        st.session_state.operating_workflow = pending_workflow
     requested_mode = st.sidebar.radio(
         "Operating mode",
         ("Historical Replay", "Analyze New Region", "Live Mode"),
@@ -211,6 +216,10 @@ def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
     events = repository.list_events()
     by_id = {record.event_id: record for record in events}
     options = list(by_id)
+    pending_event = st.session_state.pop("_pending_event_id", None)
+    if pending_event in by_id:
+        st.session_state.selected_event_id = pending_event
+        st.session_state.historical_event_id = pending_event
     current = st.session_state.get("selected_event_id")
     if current not in by_id:
         current = options[0]
@@ -234,11 +243,16 @@ def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
             disabled=not confirmed,
             key=f"delete_{selected_record.event_id}",
         ):
-            repository.delete(selected_record.event_id)
-            load_event.clear()
-            st.session_state.selected_event_id = options[0]
-            st.session_state.historical_event_id = options[0]
-            st.rerun()
+            try:
+                repository.delete(selected_record.event_id)
+            except EventOperationError as exc:
+                st.sidebar.error(exc.message, icon=None)
+                st.sidebar.caption(f"Error code: {exc.code.value}")
+            else:
+                load_event.clear()
+                fallback = next(option for option in options if option != selected_record.event_id)
+                st.session_state._pending_event_id = fallback
+                st.rerun()
     selected_layers = st.sidebar.multiselect(
         "Observation layers",
         options=("CMORPH rainfall",),
@@ -263,6 +277,7 @@ def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
 
 
 ERROR_COPY = {
+    EventErrorCode.INVALID_BOUNDS: "Choose ordered bounds that contain at least one native CMORPH grid cell.",
     EventErrorCode.DATELINE_CROSSING: "The selected box crosses the dateline. Choose a box with west longitude below east longitude.",
     EventErrorCode.REGION_TOO_LARGE: "Reduce the region to no more than 20Â° by 20Â°.",
     EventErrorCode.OUTSIDE_CMORPH_COVERAGE: "Move the region inside CMORPH latitude coverage (about 60Â°S to 60Â°N).",
@@ -304,11 +319,20 @@ def _render_region_preparation(settings) -> None:
     try:
         if entry_mode == "Center and size":
             center_a, center_b, size_a, size_b, unit_column = st.columns([1, 1, 1, 1, 1.15])
-            center_lat = center_a.number_input("Center latitude", -59.9, 59.9, float(default_center[0]), 0.1)
-            center_lon = center_b.number_input("Center longitude", -180.0, 180.0, float(default_center[1]), 0.1)
-            width = size_a.number_input("Width", 0.1, 20.0, 4.0, 0.5)
-            height = size_b.number_input("Height", 0.1, 20.0, 4.0, 0.5)
             unit = unit_column.selectbox("Size unit", (SizeUnit.DEGREES, SizeUnit.KILOMETRES), format_func=lambda item: item.value.title())
+            maximum_size = 20.0 if unit == SizeUnit.DEGREES else 2250.0
+            default_size = 4.0 if unit == SizeUnit.DEGREES else 400.0
+            size_step = 0.5 if unit == SizeUnit.DEGREES else 10.0
+            center_lat = center_a.number_input(
+                "Center latitude",
+                CMORPH_MIN_LAT,
+                CMORPH_MAX_LAT,
+                float(default_center[0]),
+                0.1,
+            )
+            center_lon = center_b.number_input("Center longitude", -180.0, 180.0, float(default_center[1]), 0.1)
+            width = size_a.number_input("Width", 0.1, maximum_size, default_size, size_step)
+            height = size_b.number_input("Height", 0.1, maximum_size, default_size, size_step)
             bounds = bounds_from_center(
                 center_lat=center_lat,
                 center_lon=center_lon,
@@ -319,8 +343,8 @@ def _render_region_preparation(settings) -> None:
         else:
             box_a, box_b, box_c, box_d = st.columns(4)
             bounds = Bounds(
-                min_lat=box_a.number_input("South latitude", -59.9, 59.9, 29.0, 0.1),
-                max_lat=box_b.number_input("North latitude", -59.9, 59.9, 33.0, 0.1),
+                min_lat=box_a.number_input("South latitude", CMORPH_MIN_LAT, CMORPH_MAX_LAT, 29.0, 0.1),
+                max_lat=box_b.number_input("North latitude", CMORPH_MIN_LAT, CMORPH_MAX_LAT, 33.0, 0.1),
                 min_lon=box_c.number_input("West longitude", -180.0, 180.0, 75.0, 0.1),
                 max_lon=box_d.number_input("East longitude", -180.0, 180.0, 79.0, 0.1),
             )
@@ -377,9 +401,8 @@ def _render_region_preparation(settings) -> None:
                 st.caption(f"Error code: {exc.code.value}")
                 return
             status.update(label="Event ready", state="complete", expanded=False)
-        st.session_state.selected_event_id = prepared.manifest.event_id
-        st.session_state.historical_event_id = prepared.manifest.event_id
-        st.session_state.operating_workflow = "Historical Replay"
+        st.session_state._pending_event_id = prepared.manifest.event_id
+        st.session_state._pending_operating_workflow = "Historical Replay"
         st.session_state.frame_index = max(0, prepared.manifest.frame_count - 3)
         center = prepared.manifest.bounding_box
         st.session_state.target_lat = (center.min_lat + center.max_lat) / 2

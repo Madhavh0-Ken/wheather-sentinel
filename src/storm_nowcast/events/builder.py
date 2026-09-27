@@ -23,7 +23,7 @@ from storm_nowcast.events.custom import (
     validate_custom_event_request,
 )
 from storm_nowcast.events.errors import EventErrorCode, EventOperationError
-from storm_nowcast.events.locking import EventBuildLock
+from storm_nowcast.events.locking import EventBuildLock, _is_link_or_reparse_point
 from storm_nowcast.events.repository import EventRepository
 from storm_nowcast.models.schemas import ProvenanceRecord
 from storm_nowcast.replay.player import ReplayPlayer, save_event
@@ -135,6 +135,7 @@ class CmorphEventBuilder:
                     local_file=str(asset.path),
                     processing_steps=[
                         action,
+                        f"acquisition evidence: {asset.acquisition_evidence}",
                         "validated compressed binary layout and checksum",
                         "cropped to requested bounds without spatial upsampling",
                     ],
@@ -179,7 +180,16 @@ class CmorphEventBuilder:
         lock = EventBuildLock(self.repository.custom_root / ".locks", event_id, clock=self.clock)
         temporary: Path | None = None
         stage = BuildStage.CHECKING_ARCHIVE
-        lock.acquire()
+        try:
+            lock.acquire()
+        except EventOperationError:
+            raise
+        except Exception as exc:
+            raise EventOperationError(
+                EventErrorCode.EVENT_STORAGE_FAILED,
+                "The event build lock could not be acquired safely.",
+                details={"event_id": event_id, "stage": stage.value},
+            ) from exc
         try:
             final = self.repository.custom_root / event_id
             if final.exists() or final.is_symlink():
@@ -264,8 +274,24 @@ class CmorphEventBuilder:
                 details={"event_id": event_id, "stage": stage.value},
             ) from exc
         finally:
-            if temporary is not None and temporary.exists():
-                parent = temporary.parent.resolve()
-                if parent == self.repository.custom_root and temporary.name.startswith(f".tmp-{event_id}-"):
-                    shutil.rmtree(temporary)
-            lock.release()
+            cleanup_error: OSError | None = None
+            try:
+                if temporary is not None and temporary.exists():
+                    parent = temporary.parent.resolve()
+                    if (
+                        parent == self.repository.custom_root
+                        and temporary.name.startswith(f".tmp-{event_id}-")
+                        and not _is_link_or_reparse_point(temporary)
+                    ):
+                        try:
+                            shutil.rmtree(temporary)
+                        except OSError as exc:
+                            cleanup_error = exc
+            finally:
+                lock.release()
+            if cleanup_error is not None:
+                raise EventOperationError(
+                    EventErrorCode.EVENT_STORAGE_FAILED,
+                    "Custom event preparation failed and temporary cleanup was blocked.",
+                    details={"event_id": event_id, "stage": stage.value},
+                ) from cleanup_error

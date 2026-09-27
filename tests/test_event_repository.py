@@ -1,8 +1,13 @@
 import json
+import os
+import subprocess
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pytest
+import xarray as xr
 import yaml
 
 from storm_nowcast.config import Bounds
@@ -124,6 +129,17 @@ def test_repository_merges_immutable_builtin_and_validated_custom_events(tmp_pat
     assert repository.validate_ready(EVENT_ID).schema_version == 1
 
 
+def test_custom_event_cannot_duplicate_a_builtin_identity(tmp_path):
+    repository, custom_root, _ = _repository(tmp_path)
+    _write_custom_event(custom_root / "builtin-event", event_id="builtin-event")
+
+    events = repository.list_events()
+
+    assert [(item.kind, item.event_id) for item in events] == [
+        ("builtin", "builtin-event"),
+    ]
+
+
 @pytest.mark.parametrize("failure", ["schema", "missing", "checksum", "provenance"])
 def test_cached_event_readiness_rejects_invalid_schema_files_and_checksums(tmp_path, failure):
     repository, custom_root, _ = _repository(tmp_path)
@@ -147,6 +163,130 @@ def test_cached_event_readiness_rejects_invalid_schema_files_and_checksums(tmp_p
     assert captured.value.code == EventErrorCode.CACHED_EVENT_INVALID
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expected_frame_count", 49),
+        (
+            "bounding_box",
+            {"min_lat": 8.0, "max_lat": 12.0, "min_lon": 74.0, "max_lon": 78.0},
+        ),
+    ],
+)
+def test_cached_event_readiness_rejects_manifest_dataset_contract_mismatch(
+    tmp_path, field, value
+):
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    _write_custom_event(directory)
+    manifest_path = directory / "manifest.json"
+    body = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body[field] = value
+    manifest_path.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.validate_ready(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.CACHED_EVENT_INVALID
+
+
+def test_cached_event_readiness_rejects_irregular_middle_timestamp(tmp_path):
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    _write_custom_event(directory)
+    event_path = directory / "event.nc"
+    with xr.open_dataset(event_path, engine="h5netcdf") as opened:
+        dataset = opened.load()
+    dataset = dataset.assign_coords(
+        time=np.array(
+            ["2023-07-09T00:00", "2023-07-09T00:45", "2023-07-09T01:00"],
+            dtype="datetime64[ns]",
+        )
+    )
+    save_event(dataset, event_path)
+    manifest_path = directory / "manifest.json"
+    body = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body["event_sha256"] = sha256_file(event_path)
+    manifest_path.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.validate_ready(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.CACHED_EVENT_INVALID
+
+
+def test_cached_event_readiness_rejects_half_hour_cadence_shifted_off_utc_slots(
+    tmp_path,
+):
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    _write_custom_event(directory)
+    event_path = directory / "event.nc"
+    with xr.open_dataset(event_path, engine="h5netcdf") as opened:
+        dataset = opened.load()
+    dataset = dataset.assign_coords(
+        time=dataset.time.values + np.timedelta64(15, "m")
+    )
+    save_event(dataset, event_path)
+    manifest_path = directory / "manifest.json"
+    body = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body["start_time"] = "2023-07-09T00:15:00Z"
+    body["end_time"] = "2023-07-09T01:15:00Z"
+    body["event_sha256"] = sha256_file(event_path)
+    manifest_path.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.validate_ready(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.CACHED_EVENT_INVALID
+
+
+def test_nonredirecting_cloud_placeholder_reparse_tag_is_not_treated_as_link():
+    from storm_nowcast.events.locking import _is_link_or_reparse_point
+
+    class PlaceholderPath:
+        def is_symlink(self):
+            return False
+
+        def is_junction(self):
+            return False
+
+        def lstat(self):
+            return type(
+                "PlaceholderStat",
+                (),
+                {
+                    "st_file_attributes": 0x400,
+                    "st_reparse_tag": 0x9000001A,
+                },
+            )()
+
+    assert _is_link_or_reparse_point(PlaceholderPath()) is False
+
+
+def test_name_surrogate_reparse_tag_is_treated_as_link():
+    from storm_nowcast.events.locking import _is_link_or_reparse_point
+
+    class RedirectingPath:
+        def is_symlink(self):
+            return False
+
+        def is_junction(self):
+            return False
+
+        def lstat(self):
+            return type(
+                "RedirectingStat",
+                (),
+                {
+                    "st_file_attributes": 0x400,
+                    "st_reparse_tag": 0xA000001D,
+                },
+            )()
+
+    assert _is_link_or_reparse_point(RedirectingPath()) is True
+
+
 def test_current_lock_is_exclusive_and_only_owner_can_release(tmp_path):
     from storm_nowcast.events.locking import EventBuildLock
 
@@ -163,6 +303,16 @@ def test_current_lock_is_exclusive_and_only_owner_can_release(tmp_path):
     assert not first.path.exists()
 
 
+def test_lock_rejects_path_like_event_identity(tmp_path):
+    from storm_nowcast.events.locking import EventBuildLock
+
+    with pytest.raises(EventOperationError) as captured:
+        EventBuildLock(tmp_path, "../outside", clock=lambda: NOW).acquire()
+
+    assert captured.value.code == EventErrorCode.UNSAFE_EVENT_PATH
+    assert not (tmp_path.parent / "outside.lock").exists()
+
+
 def test_stale_lock_recovery_has_one_new_owner_and_old_owner_cannot_release_it(tmp_path):
     from storm_nowcast.events.locking import EventBuildLock
 
@@ -177,6 +327,114 @@ def test_stale_lock_recovery_has_one_new_owner_and_old_owner_cannot_release_it(t
         loser.acquire()
     old.release()
     assert winner.path.exists()
+    assert json.loads(winner.path.read_text(encoding="utf-8"))["owner_token"] == "winner"
+    winner.release()
+
+
+def test_stale_recovery_sentinel_does_not_permanently_block_lock_acquisition(tmp_path):
+    from storm_nowcast.events.locking import EventBuildLock
+
+    old = EventBuildLock(tmp_path, EVENT_ID, clock=lambda: NOW, owner_token="old")
+    old.acquire()
+    old._write_exclusive(
+        old._recovery_path,
+        {
+            "event_id": EVENT_ID,
+            "owner_token": "crashed-recovery",
+            "pid": 1,
+            "hostname": "test",
+            "acquired_at": NOW.isoformat(),
+        },
+    )
+    later = NOW + timedelta(hours=5)
+    winner = EventBuildLock(tmp_path, EVENT_ID, clock=lambda: later, owner_token="winner")
+
+    winner.acquire()
+
+    assert json.loads(winner.path.read_text(encoding="utf-8"))["owner_token"] == "winner"
+    assert not winner._recovery_path.exists()
+    winner.release()
+
+
+def test_old_owner_release_cannot_remove_a_recovered_lock(tmp_path):
+    from storm_nowcast.events.locking import EventBuildLock
+
+    old = EventBuildLock(tmp_path, EVENT_ID, clock=lambda: NOW, owner_token="old")
+    old.acquire()
+    later = NOW + timedelta(hours=3)
+    winner = EventBuildLock(tmp_path, EVENT_ID, clock=lambda: later, owner_token="winner")
+    old_metadata_read = threading.Event()
+    allow_old_release = threading.Event()
+    winner_finished = threading.Event()
+    original_read = old._read
+
+    def paused_read(path):
+        metadata = original_read(path)
+        if path == old.path:
+            old_metadata_read.set()
+            assert allow_old_release.wait(timeout=5)
+        return metadata
+
+    old._read = paused_read
+    old_release = threading.Thread(target=old.release)
+    old_release.start()
+    assert old_metadata_read.wait(timeout=5)
+
+    def acquire_winner():
+        winner.acquire()
+        winner_finished.set()
+
+    winner_acquire = threading.Thread(target=acquire_winner)
+    winner_acquire.start()
+    winner_finished.wait(timeout=0.2)
+    allow_old_release.set()
+    old_release.join(timeout=5)
+    winner_acquire.join(timeout=5)
+
+    assert winner_finished.is_set()
+    assert json.loads(winner.path.read_text(encoding="utf-8"))["owner_token"] == "winner"
+    winner.release()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows lock paths are case-insensitive")
+def test_lock_transition_identity_is_case_insensitive_on_windows(tmp_path):
+    from storm_nowcast.events.locking import EventBuildLock
+
+    old = EventBuildLock(tmp_path, EVENT_ID, clock=lambda: NOW, owner_token="old")
+    old.acquire()
+    later = NOW + timedelta(hours=3)
+    winner = EventBuildLock(
+        tmp_path, EVENT_ID.upper(), clock=lambda: later, owner_token="winner"
+    )
+    old_metadata_read = threading.Event()
+    allow_old_release = threading.Event()
+    winner_finished = threading.Event()
+    original_read = old._read
+
+    def paused_read(path):
+        metadata = original_read(path)
+        if path == old.path:
+            old_metadata_read.set()
+            assert allow_old_release.wait(timeout=5)
+        return metadata
+
+    old._read = paused_read
+    old_release = threading.Thread(target=old.release)
+    old_release.start()
+    assert old_metadata_read.wait(timeout=5)
+
+    def acquire_winner():
+        winner.acquire()
+        winner_finished.set()
+
+    winner_acquire = threading.Thread(target=acquire_winner)
+    winner_acquire.start()
+    winner_finished.wait(timeout=0.2)
+    allow_old_release.set()
+    old_release.join(timeout=5)
+    winner_acquire.join(timeout=5)
+
+    assert winner_finished.is_set()
     assert json.loads(winner.path.read_text(encoding="utf-8"))["owner_token"] == "winner"
     winner.release()
 
@@ -238,6 +496,59 @@ def test_deletion_rejects_manifest_identity_mismatch(tmp_path):
     assert directory.exists()
 
 
+def test_deletion_accepts_minimal_valid_ownership_envelope_for_incomplete_event(tmp_path):
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text(
+        json.dumps({"schema_version": 1, "kind": "custom", "event_id": EVENT_ID}),
+        encoding="utf-8",
+    )
+    (directory / "partial-event.nc").write_bytes(b"interrupted build")
+
+    repository.delete(EVENT_ID)
+
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize("missing_field", ["schema_version", "kind"])
+def test_deletion_requires_explicit_ownership_tags(tmp_path, missing_field):
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    _write_custom_event(directory)
+    manifest_path = directory / "manifest.json"
+    body = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body.pop(missing_field)
+    manifest_path.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.delete(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.UNSAFE_EVENT_PATH
+    assert directory.exists()
+
+
+def test_deletion_sharing_violation_returns_typed_storage_error(tmp_path, monkeypatch):
+    import storm_nowcast.events.repository as repository_module
+
+    repository, custom_root, _ = _repository(tmp_path)
+    directory = custom_root / EVENT_ID
+    _write_custom_event(directory)
+    monkeypatch.setattr(
+        repository_module.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError("simulated OneDrive sharing violation")
+        ),
+    )
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.delete(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.EVENT_STORAGE_FAILED
+    assert directory.exists()
+
+
 def test_deletion_rejects_symlinked_custom_directory_when_supported(tmp_path):
     repository, custom_root, _ = _repository(tmp_path)
     outside = tmp_path / "outside"
@@ -251,6 +562,29 @@ def test_deletion_rejects_symlinked_custom_directory_when_supported(tmp_path):
 
     with pytest.raises(EventOperationError) as captured:
         repository.delete(EVENT_ID)
+
+    assert captured.value.code == EventErrorCode.UNSAFE_EVENT_PATH
+    assert outside.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction regression")
+def test_readiness_rejects_directory_junction_that_escapes_custom_root(tmp_path):
+    repository, custom_root, _ = _repository(tmp_path)
+    outside = tmp_path / "outside"
+    _write_custom_event(outside, event_id=EVENT_ID)
+    custom_root.mkdir(parents=True, exist_ok=True)
+    junction = custom_root / EVENT_ID
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"directory junction unavailable: {created.stderr or created.stdout}")
+
+    with pytest.raises(EventOperationError) as captured:
+        repository.validate_ready(EVENT_ID)
 
     assert captured.value.code == EventErrorCode.UNSAFE_EVENT_PATH
     assert outside.exists()

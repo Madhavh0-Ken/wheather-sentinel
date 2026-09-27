@@ -53,9 +53,12 @@ def create_app(
     selected_services: dict[tuple[str, str], AnalysisService] = {}
 
     application = FastAPI(
-        title="StormNowcast read-only API",
+        title="StormNowcast analysis API",
         version="0.2.0",
-        description="Read-only access to the scientifically qualified StormNowcast analysis services.",
+        description=(
+            "Scientifically qualified StormNowcast analysis with validated custom-event "
+            "preparation, selection, and deletion."
+        ),
     )
 
     status_by_code = {
@@ -121,7 +124,7 @@ def create_app(
         return {
             "status": "ok",
             "event_data": "ready" if ready else "missing",
-            "mode": "read-only",
+            "mode": "analysis-and-event-management",
         }
 
     @application.get("/sources")
