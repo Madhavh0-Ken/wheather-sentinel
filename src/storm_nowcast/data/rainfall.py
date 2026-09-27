@@ -25,6 +25,10 @@ class CmorphGridSpec:
 CMORPH_GRID = CmorphGridSpec()
 
 
+class CmorphCropError(ValueError):
+    """The requested rectangle contains no native CMORPH grid centers."""
+
+
 def parse_cmorph_bytes(
     payload: bytes,
     hour: datetime,
@@ -49,9 +53,14 @@ def parse_cmorph_bytes(
     lat_mask = (latitudes >= bounds.min_lat) & (latitudes <= bounds.max_lat)
     lon_mask = (display_lons >= bounds.min_lon) & (display_lons <= bounds.max_lon)
     if not lat_mask.any() or not lon_mask.any():
-        raise ValueError("Study-area bounds do not intersect the CMORPH grid")
+        raise CmorphCropError("Study-area bounds do not contain a CMORPH grid cell")
 
-    regional = values[:, lat_mask, :][:, :, lon_mask].astype(np.float32, copy=True)
+    selected_lons = display_lons[lon_mask]
+    longitude_order = np.argsort(selected_lons)
+    selected_lons = selected_lons[longitude_order]
+    regional = values[:, lat_mask, :][:, :, lon_mask][:, :, longitude_order].astype(
+        np.float32, copy=True
+    )
     missing = (~np.isfinite(regional)) | (regional <= -900)
     regional[missing] = np.nan
     utc_hour = hour.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -67,7 +76,7 @@ def parse_cmorph_bytes(
         coords={
             "time": times,
             "latitude": latitudes[lat_mask],
-            "longitude": display_lons[lon_mask],
+            "longitude": selected_lons,
         },
         attrs={
             "provider": "NOAA Climate Prediction Center",

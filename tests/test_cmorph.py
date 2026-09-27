@@ -59,6 +59,30 @@ def test_parser_rejects_dateline_crossing_bounds_explicitly():
         )
 
 
+def test_parser_orders_non_dateline_region_across_greenwich():
+    global_strip = CmorphGridSpec(
+        nx=360,
+        ny=1,
+        lon_start=0.5,
+        lon_step=1.0,
+        lat_start=0.0,
+        lat_step=1.0,
+    )
+    values = np.arange(720, dtype="<f4").reshape(2, 1, 360)
+
+    dataset = parse_cmorph_bytes(
+        values.tobytes(),
+        datetime(2023, 7, 9, 6, tzinfo=timezone.utc),
+        Bounds(min_lat=-0.5, max_lat=0.5, min_lon=-5.0, max_lon=5.0),
+        grid_spec=global_strip,
+    )
+
+    assert dataset.longitude.values.tolist() == pytest.approx(
+        [-4.5, -3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
+    )
+    assert np.all(np.diff(dataset.longitude.values) > 0)
+
+
 def test_loader_reads_historical_gzip_archive(tmp_path):
     values = np.arange(24, dtype="<f4").reshape(2, 3, 4)
     path = tmp_path / "historical.gz"

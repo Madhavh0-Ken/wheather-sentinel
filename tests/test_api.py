@@ -15,10 +15,13 @@ def _client():
     return TestClient(create_app(service_override=service))
 
 
-def test_read_only_api_exposes_required_health_source_and_event_routes():
+def test_api_metadata_matches_analysis_and_custom_event_operations():
     client = _client()
 
-    assert client.get("/health").json()["status"] == "ok"
+    health = client.get("/health").json()
+    assert health["status"] == "ok"
+    assert health["mode"] == "analysis-and-event-management"
+    assert "read-only" not in client.get("/openapi.json").json()["info"]["title"].lower()
     sources = client.get("/sources").json()
     assert any(item["source"].startswith("CMORPH") and item["implemented"] for item in sources)
     assert client.get("/events").status_code == 200

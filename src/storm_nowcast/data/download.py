@@ -26,14 +26,23 @@ def validate_official_url(url: str) -> None:
         raise ValueError("Download URL is not an authoritative NOAA CPC HTTPS host")
 
 
-def download_file(url: str, destination: Path, timeout: tuple[int, int] = (15, 120)) -> DownloadResult:
+def download_file(
+    url: str,
+    destination: Path,
+    timeout: tuple[int, int] = (15, 120),
+    *,
+    reuse_existing: bool = True,
+) -> DownloadResult:
     validate_official_url(url)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and destination.stat().st_size:
+    if reuse_existing and destination.exists() and destination.stat().st_size:
         return DownloadResult(destination, sha256_file(destination), False, destination.stat().st_size)
 
     partial = destination.with_suffix(destination.suffix + ".part")
+    if not reuse_existing:
+        destination.unlink(missing_ok=True)
+        partial.unlink(missing_ok=True)
     existing = partial.stat().st_size if partial.exists() else 0
     headers = {"Range": f"bytes={existing}-"} if existing else {}
     with requests.get(url, stream=True, timeout=timeout, headers=headers) as response:
@@ -46,4 +55,3 @@ def download_file(url: str, destination: Path, timeout: tuple[int, int] = (15, 1
                     handle.write(chunk)
     partial.replace(destination)
     return DownloadResult(destination, sha256_file(destination), True, destination.stat().st_size)
-

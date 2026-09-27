@@ -29,7 +29,9 @@ rows and the insufficient +120 row. Emphasize the sample count of one at each
 available lead.
 
 **4:35–5:00 — Extension boundary.** Expand sensor evidence and hazard availability.
-Show that unavailable lightning, hail, and downburst evidence is not replaced by
-zero. Mention the read-only API and the next step: authorized MOSDAC/IMD files plus
-multi-event validation.
-
+Choose **Analyze New Region**, select the Kerala preset, and show the no-download
+map preview plus inclusive observation and source-file counts. Explain that
+preparation uses official NOAA files, creates a checksum-validated event atomically,
+and can reopen it offline. Do not start a live download during the timed
+demonstration. Unavailable lightning, hail, and downburst evidence is not replaced
+by zero.

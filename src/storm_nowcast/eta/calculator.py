@@ -15,7 +15,11 @@ def calculate_eta(
     if issued_at.tzinfo is None or issued_at.utcoffset() is None:
         raise ValueError("Forecast issuance time must be timezone-aware")
     if not forecasts:
-        raise ValueError("At least one forecast point is required")
+        return ETAResult(
+            approaches_target=False,
+            closest_distance_km=None,
+            explanation="Insufficient temporal history for motion forecast.",
+        )
 
     distances = [
         haversine_km(target_lat, target_lon, point.latitude, point.longitude)

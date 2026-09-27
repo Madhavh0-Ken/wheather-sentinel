@@ -31,7 +31,13 @@ files are cached, verify or start without network access using:
 .\.venv\Scripts\python.exe scripts\prepare_demo.py --no-download
 ```
 
-Run the read-only API in a second terminal:
+To analyze another supported region, choose **Analyze New Region** in the dashboard
+or use `scripts\prepare_custom_event.py`. Requests are limited to 20 degrees by 20
+degrees and an inclusive 24-hour UTC span (49 half-hour observations). Prepared
+custom events are checksum-validated, reopen offline, and do not replace the
+built-in default. See [CUSTOM_REGION_ANALYSIS.md](CUSTOM_REGION_ANALYSIS.md).
+
+Run the API in a second terminal:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn storm_nowcast.api.app:app --host 127.0.0.1 --port 8000
@@ -62,7 +68,7 @@ Build causal training-data artifacts (this does not train a model):
 - Typed multi-sensor contracts, generic explicit official-file import, a
   resolution-aware weather cube, evidence-bearing digital twins, sensor-gated
   initiation/lightning analytics, raster translation nowcasting, live polling,
-  alert rules, and a read-only FastAPI layer.
+  alert rules, and an event-aware FastAPI layer.
 - Product-specific documented-schema ingestion for MOSDAC INSAT-3DR
   `3RIMG_L1C_ASIA_MER`, including file-supplied TIR1/WV calibration LUTs,
   Mercator geolocation, acquisition time, native resolution, and checksum provenance.
@@ -71,6 +77,9 @@ Build causal training-data artifacts (this does not train a model):
   for learned-model training.
 - Historical/live-mode UI. Live mode truthfully falls back because no live provider
   is configured in this build.
+- Center/size or bounding-box CMORPH preparation, map preview, validated shared raw
+  cache, atomic custom-event repository, offline reopening, safe deletion, and
+  event-scoped Streamlit/FastAPI analysis.
 
 ## What is not connected
 
@@ -85,5 +94,6 @@ labels and a multi-event training/validation corpus are absent.
 See [DATA_SOURCES.md](DATA_SOURCES.md), [PROJECT_STATUS.md](PROJECT_STATUS.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [MODEL_CARD.md](MODEL_CARD.md), and
 [VALIDATION.md](VALIDATION.md) for the exact evidence and limitations. See also
-[TRAINING_DATA.md](TRAINING_DATA.md) and [SENSOR_INTEGRATION.md](SENSOR_INTEGRATION.md).
+[CUSTOM_REGION_ANALYSIS.md](CUSTOM_REGION_ANALYSIS.md),
+[TRAINING_DATA.md](TRAINING_DATA.md), and [SENSOR_INTEGRATION.md](SENSOR_INTEGRATION.md).
 The known-good CMORPH checkpoint is git commit `3d0a01a`.

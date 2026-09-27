@@ -3,17 +3,18 @@ from __future__ import annotations
 import base64
 import json
 import time
-from datetime import datetime
+from datetime import datetime, time as clock_time, timezone
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import xarray as xr
 
-from storm_nowcast.config import load_settings
+from storm_nowcast.config import Bounds, load_settings
 from storm_nowcast.alerts.engine import AlertEngine, AlertRule
 from storm_nowcast.confidence.framework import estimate_forecast_confidence
 from storm_nowcast.data.provenance import read_manifest
+from storm_nowcast.data.cmorph_cache import CmorphCache
 from storm_nowcast.data.sources import (
     CmorphSource,
     ImdLightningSource,
@@ -21,17 +22,73 @@ from storm_nowcast.data.sources import (
     MosdacSatelliteSource,
 )
 from storm_nowcast.evaluation import evaluate_forecasts
-from storm_nowcast.events.catalog import load_event_catalog
+from storm_nowcast.events.builder import BuildStage, CmorphEventBuilder
+from storm_nowcast.events.custom import (
+    CMORPH_MAX_LAT,
+    CMORPH_MIN_LAT,
+    CustomEventRequest,
+    EventLibraryRecord,
+    SizeUnit,
+    bounds_from_center,
+    required_cmorph_hours,
+)
+from storm_nowcast.events.errors import EventErrorCode, EventOperationError
+from storm_nowcast.events.repository import EventRepository
 from storm_nowcast.hazards.registry import assess_hazards
 from storm_nowcast.initiation.scoring import score_convective_initiation
 from storm_nowcast.replay.player import ReplayPlayer
 from storm_nowcast.tracking.twin import build_multisensor_twin
 from storm_nowcast.visualization.layers import build_map
+from storm_nowcast.visualization.region import build_region_preview
 from storm_nowcast.visualization.panels import (
     hazard_rows,
     resolve_operating_mode,
     sensor_availability_rows,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CUSTOM_EVENT_ROOT = PROJECT_ROOT / "data" / "events" / "custom"
+
+
+def event_option_label(record: EventLibraryRecord) -> str:
+    prefix = "Built-in" if record.kind == "builtin" else "Custom"
+    return f"{prefix} | {record.display_name}"
+
+
+def request_summary(request: CustomEventRequest) -> dict[str, object]:
+    elapsed = request.end_time - request.start_time
+    minutes = int(elapsed.total_seconds() // 60)
+    return {
+        "observations": request.expected_frame_count,
+        "source_hours": len(required_cmorph_hours(request)),
+        "span": f"{minutes // 60}h {minutes % 60:02d}m inclusive",
+        "bounds": (
+            f"{request.min_lat:.2f} to {request.max_lat:.2f} deg N/S | "
+            f"{request.min_lon:.2f} to {request.max_lon:.2f} deg E/W"
+        ),
+    }
+
+
+def target_outside_bounds(target: tuple[float, float], bounds: Bounds) -> bool:
+    return not (
+        bounds.min_lat <= target[0] <= bounds.max_lat
+        and bounds.min_lon <= target[1] <= bounds.max_lon
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def event_repository() -> EventRepository:
+    return EventRepository(PROJECT_ROOT / "configs" / "events.yaml", CUSTOM_EVENT_ROOT)
+
+
+@st.cache_resource(show_spinner=False)
+def event_builder() -> CmorphEventBuilder:
+    return CmorphEventBuilder(
+        event_repository(),
+        CmorphCache(PROJECT_ROOT / "data" / "raw" / "cmorph"),
+        load_settings(),
+    )
 
 
 def event_status_message(path: Path) -> str:
@@ -94,6 +151,11 @@ def _css() -> None:
         .cue { border:1px solid var(--line); background:#091724; padding:.72rem .9rem; margin:.15rem 0 .7rem;
           display:flex; justify-content:space-between; gap:1rem; font-variant-numeric:tabular-nums; }
         .cue strong { color:var(--obs); }
+        .request-band { border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+          padding:.72rem 0; margin:.45rem 0 .8rem; display:flex; flex-wrap:wrap; gap:.45rem 1.5rem;
+          color:var(--muted); font-size:.82rem; font-variant-numeric:tabular-nums; }
+        .request-band strong { color:var(--text); font-weight:650; }
+        .preparation-note { max-width:72ch; color:var(--muted); line-height:1.52; margin-bottom:.8rem; }
         .readout { border-top:1px solid var(--line); padding-top:.8rem; margin-top:.7rem; }
         .readout h3 { font-size:1.05rem; margin:0 0 .75rem; }
         .readout dl { display:grid; grid-template-columns:1fr auto; gap:.46rem 1rem; margin:0; }
@@ -125,6 +187,7 @@ def _css() -> None:
           .st-key-replay_controls .stButton button { min-height:2.5rem; padding:.25rem .45rem; }
           .st-key-replay_controls button p, .st-key-replay_controls label p { font-size:.68rem !important; white-space:nowrap; }
           .cue { flex-direction:column; gap:.25rem; }
+          .request-band { display:grid; grid-template-columns:1fr 1fr; gap:.5rem .8rem; }
         }
         </style>
         """.replace("__FONT_DATA__", font_data),
@@ -132,28 +195,64 @@ def _css() -> None:
     )
 
 
-def _source_sidebar(settings) -> tuple[object, bool, Path]:
+def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
     st.sidebar.header("Operations")
+    pending_workflow = st.session_state.pop("_pending_operating_workflow", None)
+    if pending_workflow is not None:
+        st.session_state.operating_workflow = pending_workflow
     requested_mode = st.sidebar.radio(
-        "Operating mode", ("Historical Replay", "Live Mode"), horizontal=True
+        "Operating mode",
+        ("Historical Replay", "Analyze New Region", "Live Mode"),
+        key="operating_workflow",
     )
     mode = resolve_operating_mode(
-        requested_mode,
+        "Live Mode" if requested_mode == "Live Mode" else "Historical Replay",
         live_enabled=settings.features.live_mode,
         live_sources_available=False,
     )
     if mode.fallback:
         st.sidebar.warning(mode.message, icon=None)
-    catalog_path = Path("configs/events.yaml")
-    event_path = settings.data.processed_event
-    if catalog_path.exists():
-        catalog = load_event_catalog(catalog_path)
-        labels = {event.id: event.name for event in catalog.events}
-        selected_event = st.sidebar.selectbox(
-            "Historical event", options=list(labels), format_func=lambda event_id: labels[event_id]
+    repository = event_repository()
+    events = repository.list_events()
+    by_id = {record.event_id: record for record in events}
+    options = list(by_id)
+    pending_event = st.session_state.pop("_pending_event_id", None)
+    if pending_event in by_id:
+        st.session_state.selected_event_id = pending_event
+        st.session_state.historical_event_id = pending_event
+    current = st.session_state.get("selected_event_id")
+    if current not in by_id:
+        current = options[0]
+    selected_event = st.sidebar.selectbox(
+        "Historical event",
+        options=options,
+        index=options.index(current),
+        format_func=lambda event_id: event_option_label(by_id[event_id]),
+        key="historical_event_id",
+    )
+    st.session_state.selected_event_id = selected_event
+    selected_record = by_id[selected_event]
+    if selected_record.kind == "custom":
+        st.sidebar.caption(f"Validated custom event | {selected_record.stored_bytes / 1_048_576:.1f} MB")
+        confirmed = st.sidebar.checkbox(
+            "Confirm custom event deletion",
+            key=f"confirm_delete_{selected_record.event_id}",
         )
-        if selected_event:
-            event_path = catalog.get(selected_event).data_path
+        if st.sidebar.button(
+            "Delete custom event",
+            disabled=not confirmed,
+            key=f"delete_{selected_record.event_id}",
+        ):
+            try:
+                repository.delete(selected_record.event_id)
+            except EventOperationError as exc:
+                st.sidebar.error(exc.message, icon=None)
+                st.sidebar.caption(f"Error code: {exc.code.value}")
+            else:
+                load_event.clear()
+                fallback = next(option for option in options if option != selected_record.event_id)
+                st.session_state._pending_event_id = fallback
+                st.rerun()
     selected_layers = st.sidebar.multiselect(
         "Observation layers",
         options=("CMORPH rainfall",),
@@ -174,7 +273,142 @@ def _source_sidebar(settings) -> tuple[object, bool, Path]:
         "CMORPH is a satellite precipitation estimate—not radar. Grid spacing is approximately "
         "8 km; effective source resolution is coarser."
     )
-    return mode, "CMORPH rainfall" in selected_layers, event_path
+    return mode, "CMORPH rainfall" in selected_layers, selected_record, requested_mode
+
+
+ERROR_COPY = {
+    EventErrorCode.INVALID_BOUNDS: "Choose ordered bounds that contain at least one native CMORPH grid cell.",
+    EventErrorCode.DATELINE_CROSSING: "The selected box crosses the dateline. Choose a box with west longitude below east longitude.",
+    EventErrorCode.REGION_TOO_LARGE: "Reduce the region to no more than 20Â° by 20Â°.",
+    EventErrorCode.OUTSIDE_CMORPH_COVERAGE: "Move the region inside CMORPH latitude coverage (about 60Â°S to 60Â°N).",
+    EventErrorCode.INVALID_TIME_WINDOW: "Use timezone-aware UTC half-hours with an inclusive span of 24 hours or less.",
+    EventErrorCode.UNSUPPORTED_ARCHIVE_DATE: "Choose completed half-hour observations from the accessible archive (2023 onward).",
+    EventErrorCode.EVENT_BUILD_IN_PROGRESS: "This exact event is already being prepared. Wait for that preparation to finish.",
+    EventErrorCode.NOAA_UNAVAILABLE: "A required NOAA source hour is unavailable. Check the connection or retry with cached hours.",
+    EventErrorCode.NOAA_FILE_CORRUPT: "A required NOAA file failed validation and could not be recovered safely.",
+    EventErrorCode.EVENT_STORAGE_FAILED: "The event could not be stored atomically. No partial event was added.",
+}
+
+
+def _utc_datetime(selected_date, selected_time: clock_time) -> datetime:
+    return datetime.combine(selected_date, selected_time, tzinfo=timezone.utc)
+
+
+def _render_region_preparation(settings) -> None:
+    st.subheader("Prepare a CMORPH region")
+    st.markdown(
+        '<p class="preparation-note">Choose a bounded area and inclusive UTC half-hour window. '
+        "StormNowcast reuses validated NOAA files, creates the event atomically, then opens the existing replay and analysis desk.</p>",
+        unsafe_allow_html=True,
+    )
+    presets = {
+        "Custom": None,
+        "Kerala": (10.3, 76.3),
+        "Delhi NCR": (28.6, 77.2),
+        "Mumbai": (19.1, 72.9),
+        "Bengaluru": (13.0, 77.6),
+        "Chennai": (13.1, 80.3),
+    }
+    preset = st.selectbox("Region preset", list(presets), help="Presets set a center only; adjust the size before preparing.")
+    entry_mode = st.radio("Region entry", ("Center and size", "Bounding box"), horizontal=True)
+    default_center = presets[preset] or (
+        (settings.study_area.bounds.min_lat + settings.study_area.bounds.max_lat) / 2,
+        (settings.study_area.bounds.min_lon + settings.study_area.bounds.max_lon) / 2,
+    )
+    bounds: Bounds | None = None
+    try:
+        if entry_mode == "Center and size":
+            center_a, center_b, size_a, size_b, unit_column = st.columns([1, 1, 1, 1, 1.15])
+            unit = unit_column.selectbox("Size unit", (SizeUnit.DEGREES, SizeUnit.KILOMETRES), format_func=lambda item: item.value.title())
+            maximum_size = 20.0 if unit == SizeUnit.DEGREES else 2250.0
+            default_size = 4.0 if unit == SizeUnit.DEGREES else 400.0
+            size_step = 0.5 if unit == SizeUnit.DEGREES else 10.0
+            center_lat = center_a.number_input(
+                "Center latitude",
+                CMORPH_MIN_LAT,
+                CMORPH_MAX_LAT,
+                float(default_center[0]),
+                0.1,
+            )
+            center_lon = center_b.number_input("Center longitude", -180.0, 180.0, float(default_center[1]), 0.1)
+            width = size_a.number_input("Width", 0.1, maximum_size, default_size, size_step)
+            height = size_b.number_input("Height", 0.1, maximum_size, default_size, size_step)
+            bounds = bounds_from_center(
+                center_lat=center_lat,
+                center_lon=center_lon,
+                width=width,
+                height=height,
+                unit=unit,
+            )
+        else:
+            box_a, box_b, box_c, box_d = st.columns(4)
+            bounds = Bounds(
+                min_lat=box_a.number_input("South latitude", CMORPH_MIN_LAT, CMORPH_MAX_LAT, 29.0, 0.1),
+                max_lat=box_b.number_input("North latitude", CMORPH_MIN_LAT, CMORPH_MAX_LAT, 33.0, 0.1),
+                min_lon=box_c.number_input("West longitude", -180.0, 180.0, 75.0, 0.1),
+                max_lon=box_d.number_input("East longitude", -180.0, 180.0, 79.0, 0.1),
+            )
+    except (ValueError, EventOperationError) as exc:
+        st.error(str(exc), icon=None)
+
+    default_date = datetime(2023, 7, 9, tzinfo=timezone.utc).date()
+    date_a, time_a, date_b, time_b, name_column = st.columns([1, 1, 1, 1, 1.4])
+    start_date = date_a.date_input("Start date (UTC)", default_date)
+    start_time = time_a.time_input("First observation", clock_time(0, 0), step=1800)
+    end_date = date_b.date_input("End date (UTC)", default_date)
+    end_time = time_b.time_input("Last observation", clock_time(5, 30), step=1800)
+    event_name = name_column.text_input("Event name (optional)", placeholder="Display label only")
+
+    request = None
+    if bounds is not None:
+        request = CustomEventRequest(
+            min_lat=bounds.min_lat,
+            max_lat=bounds.max_lat,
+            min_lon=bounds.min_lon,
+            max_lon=bounds.max_lon,
+            start_time=_utc_datetime(start_date, start_time),
+            end_time=_utc_datetime(end_date, end_time),
+            event_name=event_name or None,
+        )
+        preview_column, summary_column = st.columns([1.65, 1], gap="large")
+        with preview_column:
+            st.plotly_chart(build_region_preview(bounds), width="stretch", config={"displaylogo": False})
+        with summary_column:
+            summary = request_summary(request)
+            st.markdown(
+                f"""
+                <div class="request-band">
+                  <span><strong>{summary['observations']}</strong><br>half-hour observations</span>
+                  <span><strong>{summary['source_hours']}</strong><br>hourly source files</span>
+                  <span><strong>{summary['span']}</strong><br>UTC time window</span>
+                  <span><strong>{summary['bounds']}</strong><br>requested crop</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("CMORPH uses approximately 8 km grid spacing; effective source resolution is coarser. No finer observations are created.")
+
+    if st.button("Download & Analyze", type="primary", disabled=request is None, width="stretch") and request:
+        with st.status("Checking archive", expanded=True) as status:
+            def report(stage: BuildStage) -> None:
+                status.update(label=stage.value, state="running")
+
+            try:
+                prepared = event_builder().prepare(request, progress=report)
+            except EventOperationError as exc:
+                status.update(label="Preparation stopped safely", state="error", expanded=True)
+                st.error(ERROR_COPY.get(exc.code, exc.message), icon=None)
+                st.caption(f"Error code: {exc.code.value}")
+                return
+            status.update(label="Event ready", state="complete", expanded=False)
+        st.session_state._pending_event_id = prepared.manifest.event_id
+        st.session_state._pending_operating_workflow = "Historical Replay"
+        st.session_state.frame_index = max(0, prepared.manifest.frame_count - 3)
+        center = prepared.manifest.bounding_box
+        st.session_state.target_lat = (center.min_lat + center.max_lat) / 2
+        st.session_state.target_lon = (center.min_lon + center.max_lon) / 2
+        load_event.clear()
+        st.rerun()
 
 
 def _track_readout(track, eta, *, observation_time: datetime, target: tuple[float, float]) -> None:
@@ -257,19 +491,24 @@ def _track_readout(track, eta, *, observation_time: datetime, target: tuple[floa
         }
         for point in track.forecasts
     ]
-    st.dataframe(pd.DataFrame(forecast_rows), hide_index=True, width="stretch")
+    if forecast_rows:
+        st.dataframe(pd.DataFrame(forecast_rows), hide_index=True, width="stretch")
+    else:
+        st.info("Insufficient temporal history for motion forecast.", icon=None)
     st.caption(
         "Evidence quality above evaluates sensor availability and track history. The per-lead track heuristic "
         "is a separate motion-baseline label. Neither is calibrated or operational guidance."
     )
     arrival = eta.estimated_arrival.strftime("%Y-%m-%d %H:%M UTC") if eta.estimated_arrival else "Not issued"
+    closest = f"{eta.closest_distance_km:.1f} km" if eta.closest_distance_km is not None else "Unavailable"
+    lead = f"+{eta.closest_lead_minutes} min" if eta.closest_lead_minutes is not None else "Unavailable"
     st.markdown(
         f"""
         <div class="readout">
           <h3>Target closest approach / qualified ETA</h3>
           <dl><dt>Approaches corridor</dt><dd>{'YES' if eta.approaches_target else 'NO'}</dd>
-          <dt>Closest distance</dt><dd>{eta.closest_distance_km:.1f} km</dd>
-          <dt>Forecast lead</dt><dd>+{eta.closest_lead_minutes} min</dd>
+          <dt>Closest distance</dt><dd>{closest}</dd>
+          <dt>Forecast lead</dt><dd>{lead}</dd>
           <dt>Estimated arrival</dt><dd>{arrival}</dd></dl>
           <p class="limitation">{eta.explanation}</p>
         </div>
@@ -282,7 +521,8 @@ def main() -> None:
     st.set_page_config(page_title="StormNowcast", page_icon="SN", layout="wide")
     _css()
     settings = load_settings()
-    mode, show_rainfall, event_path = _source_sidebar(settings)
+    mode, show_rainfall, selected_event, requested_workflow = _source_sidebar(settings)
+    event_path = selected_event.data_path
     st.title("StormNowcast")
     mode_label, mode_class = observation_mode(event_path)
     st.markdown(
@@ -296,6 +536,10 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    if requested_workflow == "Analyze New Region":
+        _render_region_preparation(settings)
+        return
+
     if not event_path.exists():
         st.error(event_status_message(event_path), icon=None)
         st.code(".\\.venv\\Scripts\\python.exe scripts\\prepare_demo.py", language="powershell")
@@ -304,7 +548,18 @@ def main() -> None:
     dataset = load_event(str(event_path))
     player = ReplayPlayer(dataset, settings)
     default_frame = max(0, player.frame_count - 3)
-    if "frame_index" not in st.session_state:
+    dataset_bounds = selected_event.bounding_box or Bounds(
+        min_lat=float(dataset.latitude.values.min()),
+        max_lat=float(dataset.latitude.values.max()),
+        min_lon=float(dataset.longitude.values.min()),
+        max_lon=float(dataset.longitude.values.max()),
+    )
+    if st.session_state.get("active_event_id") != selected_event.event_id:
+        st.session_state.active_event_id = selected_event.event_id
+        st.session_state.frame_index = default_frame
+        st.session_state.target_lat = (dataset_bounds.min_lat + dataset_bounds.max_lat) / 2
+        st.session_state.target_lon = (dataset_bounds.min_lon + dataset_bounds.max_lon) / 2
+    if "frame_index" not in st.session_state or st.session_state.frame_index >= player.frame_count:
         st.session_state.frame_index = default_frame
 
     with st.container(key="replay_controls"):
@@ -335,6 +590,8 @@ def main() -> None:
     target_lat = float(st.session_state.target_lat)
     target_lon = float(st.session_state.target_lon)
     target = (target_lat, target_lon)
+    if target_outside_bounds(target, dataset_bounds):
+        st.warning("The selected target is outside this event region; closest-approach analysis remains available.", icon=None)
     snapshot = player.analyze(st.session_state.frame_index, target)
     st.markdown(
         f"""
@@ -345,9 +602,21 @@ def main() -> None:
     )
 
     map_column, rail_column = st.columns([2.15, 1], gap="large")
+    track_ids = [track.id for track in snapshot.tracks]
+    track_key = f"selected_track_{selected_event.event_id}"
+    selected_id = st.session_state.get(track_key)
+    if selected_id not in track_ids:
+        selected_id = track_ids[0] if track_ids else None
     with map_column:
         st.plotly_chart(
-            build_map(snapshot, target, show_rainfall=show_rainfall),
+            build_map(
+                snapshot,
+                target,
+                show_rainfall=show_rainfall,
+                event_id=selected_event.event_id,
+                bounds=dataset_bounds,
+                selected_track_id=selected_id,
+            ),
             width="stretch",
             config={"displaylogo": False},
         )
@@ -364,8 +633,12 @@ def main() -> None:
                 "Target longitude", min_value=-180.0, max_value=180.0, step=0.01, key="target_lon"
             )
         if snapshot.tracks:
-            track_ids = [track.id for track in snapshot.tracks]
-            selected_id = st.selectbox("Inspect Intense Precipitation Cell", track_ids)
+            selected_id = st.selectbox(
+                "Inspect Intense Precipitation Cell",
+                track_ids,
+                index=track_ids.index(selected_id),
+                key=track_key,
+            )
             track = next(item for item in snapshot.tracks if item.id == selected_id)
             _track_readout(
                 track,
@@ -405,14 +678,19 @@ def main() -> None:
     info_left, info_right = st.columns([1.35, 1])
     with info_left:
         st.subheader("Observation provenance")
-        if settings.data.provenance_manifest.exists():
-            records = read_manifest(settings.data.provenance_manifest)
+        provenance_path = (
+            selected_event.manifest_path.parent / "provenance.json"
+            if selected_event.manifest_path is not None
+            else settings.data.provenance_manifest
+        )
+        if provenance_path.exists():
+            records = read_manifest(provenance_path)
             st.write(
                 f"{len(records)} official NOAA CPC hourly files · acquired with SHA-256 checksums · "
                 f"{dataset.attrs.get('observation_start')} to {dataset.attrs.get('observation_end')}"
             )
             with st.expander("Inspect source records"):
-                st.json(json.loads(settings.data.provenance_manifest.read_text(encoding="utf-8")))
+                st.json(json.loads(provenance_path.read_text(encoding="utf-8")))
         else:
             st.warning("Provenance manifest is missing. Re-run the preparation command.", icon=None)
     with info_right:
