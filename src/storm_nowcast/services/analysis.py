@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 import xarray as xr
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from storm_nowcast.confidence.framework import ConfidenceEstimate, estimate_forecast_confidence
 from storm_nowcast.config import Settings
 from storm_nowcast.hazards.registry import HazardAssessment, assess_hazards
 from storm_nowcast.models.schemas import ETAResult, ForecastPoint
+from storm_nowcast.models.twin import SatelliteVariableSummary
 from storm_nowcast.replay.player import ReplayPlayer
 from storm_nowcast.tracking.twin import build_multisensor_twin
 
@@ -43,6 +44,14 @@ class AnalysisSnapshot(BaseModel):
     target: tuple[float, float]
     tracks: list[TrackSnapshot]
     is_synthetic: bool
+    insat_available: bool = False
+    insat_observation_time: datetime | None = None
+    insat_age_minutes: float | None = None
+    insat_product: str | None = None
+    insat_provider: str | None = None
+    insat_source_file: str | None = None
+    insat_provenance: dict[str, Any] | None = None
+    insat_variables: list[SatelliteVariableSummary] = Field(default_factory=list)
 
 
 class AnalysisService:
@@ -51,14 +60,27 @@ class AnalysisService:
         self.event_id = event_id
 
     @classmethod
-    def from_dataset(cls, dataset: xr.Dataset, *, settings: Settings, event_id: str) -> "AnalysisService":
-        return cls(ReplayPlayer(dataset, settings), event_id=event_id)
+    def from_dataset(
+        cls,
+        dataset: xr.Dataset,
+        *,
+        settings: Settings,
+        event_id: str,
+        satellite_cube: xr.Dataset | None = None,
+    ) -> "AnalysisService":
+        return cls(
+            ReplayPlayer(dataset, settings, satellite_cube=satellite_cube),
+            event_id=event_id,
+        )
 
     def snapshot(self, *, frame_index: int, target: tuple[float, float]) -> AnalysisSnapshot:
         replay = self.player.analyze(frame_index, target)
         tracks: list[TrackSnapshot] = []
         for track in replay.tracks:
-            twin = build_multisensor_twin(track, [])
+            twin = build_multisensor_twin(
+                track,
+                replay.sensor_evidence_by_track.get(track.id, []),
+            )
             confidence = estimate_forecast_confidence(twin, lead_minutes=30)
             tracks.append(
                 TrackSnapshot(
@@ -90,4 +112,12 @@ class AnalysisService:
             target=target,
             tracks=tracks,
             is_synthetic=bool(self.player.dataset.attrs.get("is_synthetic", False)),
+            insat_available=replay.insat.available,
+            insat_observation_time=replay.insat.observation_time,
+            insat_age_minutes=replay.insat.age_minutes,
+            insat_product=replay.insat.product,
+            insat_provider=replay.insat.provider,
+            insat_source_file=replay.insat.source_file,
+            insat_provenance=replay.insat.provenance,
+            insat_variables=list(replay.insat.variables),
         )

@@ -65,6 +65,7 @@ class EventRepository:
             start_time=manifest.start_time,
             end_time=manifest.end_time,
             frame_count=manifest.frame_count,
+            sources=[f"{manifest.provider} {manifest.source_product}"],
             stored_bytes=manifest.stored_bytes,
             bounding_box=manifest.bounding_box,
             analysis_ready=manifest.analysis_ready,
@@ -81,6 +82,9 @@ class EventRepository:
             start_time=item.observation_start,
             end_time=item.observation_end,
             frame_count=item.frame_count,
+            sources=list(item.sources),
+            insat_data_path=item.insat_data_path,
+            insat_max_age_minutes=item.insat_max_age_minutes,
             stored_bytes=item.data_path.stat().st_size if item.data_path.is_file() else 0,
         )
 

@@ -18,6 +18,8 @@ class EventRecord(BaseModel):
     sources: list[str] = Field(min_length=1)
     frame_count: int = Field(gt=0)
     data_path: Path
+    insat_data_path: Path | None = None
+    insat_max_age_minutes: int = Field(default=30, ge=0, le=360)
     limitations: list[str] = Field(default_factory=list)
 
     _utc_times = field_validator("observation_start", "observation_end", mode="before")(_as_utc)
@@ -38,7 +40,10 @@ def load_event_catalog(path: Path) -> EventCatalog:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     project_root = path.resolve().parent.parent
     for item in payload.get("events", []):
-        data_path = Path(item["data_path"])
-        if not data_path.is_absolute():
-            item["data_path"] = project_root / data_path
+        for field in ("data_path", "insat_data_path"):
+            if not item.get(field):
+                continue
+            data_path = Path(item[field])
+            if not data_path.is_absolute():
+                item[field] = project_root / data_path
     return EventCatalog.model_validate(payload)

@@ -100,6 +100,9 @@ class EventLibraryRecord(BaseModel):
     start_time: datetime
     end_time: datetime
     frame_count: int = Field(gt=0)
+    sources: list[str] = Field(default_factory=list)
+    insat_data_path: Path | None = None
+    insat_max_age_minutes: int = Field(default=30, ge=0, le=360)
     stored_bytes: int = Field(default=0, ge=0)
     bounding_box: Bounds | None = None
     analysis_ready: bool = True

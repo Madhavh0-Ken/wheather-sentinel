@@ -26,14 +26,28 @@ def test_download_guard_rejects_non_noaa_hosts():
 
 
 def test_optional_adapters_disclose_access_requirements():
+    from storm_nowcast.data.sources import NwpSource
+
     mosdac = MosdacSatelliteSource().status()
     radar = ImdRadarSource().status()
     lightning = ImdLightningSource().status()
 
     assert mosdac.authentication_required is True
     assert mosdac.implemented is True
-    assert mosdac.verified_with_real_data is False
-    assert "not yet verified" in mosdac.message
+    assert mosdac.verified_with_real_data is True
+    assert "3RIMG_L1C_ASIA_MER" in mosdac.message
     assert radar.manual_file_required is True
     assert lightning.manual_file_required is True
     assert not any(status.available for status in (mosdac, radar, lightning))
+    assert NwpSource().status().available is False
+
+
+def test_mosdac_source_reports_real_event_availability_without_hiding_access_requirements(tmp_path):
+    status = MosdacSatelliteSource().status(available=True, data_path=tmp_path / "insat")
+
+    assert status.available is True
+    assert status.verified_with_real_data is True
+    assert status.authentication_required is True
+    assert status.manual_file_required is True
+    assert status.data_path == str(tmp_path / "insat")
+    assert "3RIMG_L1C_ASIA_MER" in status.message

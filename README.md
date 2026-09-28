@@ -2,10 +2,11 @@
 
 StormNowcast is a local, map-first prototype for replaying authoritative rainfall
 observations over India, detecting **Intense Precipitation Cells**, tracking them,
-and issuing transparent short-range movement extrapolations. Its only verified
-production data path is the public NOAA CPC CMORPH archive. CMORPH has an
-approximately 8 km grid and coarser effective resolution; the application does not
-present it as radar or as 1–3 km observations.
+and issuing transparent short-range movement extrapolations. The built-in event uses
+public NOAA CPC CMORPH rainfall and can attach authorized local ISRO/SAC MOSDAC
+INSAT-3DR Level-1C observations as optional causal evidence. CMORPH has an
+approximately 8 km grid and coarser effective resolution; neither source is presented
+as weather radar or as finer observations than its native metadata supports.
 
 The risk output is named **Prototype Extreme Rain Risk**. It is an uncalibrated
 rainfall-derived heuristic, not meteorological cloudburst detection and not an
@@ -72,6 +73,15 @@ Build causal training-data artifacts (this does not train a model):
 - Product-specific documented-schema ingestion for MOSDAC INSAT-3DR
   `3RIMG_L1C_ASIA_MER`, including file-supplied TIR1/WV calibration LUTs,
   Mercator geolocation, acquisition time, native resolution, and checksum provenance.
+- Event-specific discovery and backward-only alignment of real MOSDAC observations:
+  an INSAT observation must be at or before the replay frame and no more than 30
+  minutes old. Missing and partial coverage remain explicit masks, and a replay with
+  no local INSAT directory continues on the CMORPH-only path.
+- Replay snapshot, API, digital-twin, and dashboard evidence for calibrated
+  `infrared_brightness_temperature` (`IMG_TIR1`) and
+  `water_vapour_brightness_temperature` (`IMG_WV`) in kelvin. The optional map layer
+  is labelled **INSAT-3DR TIR1 Brightness Temperature (K) — native metadata 4 km**
+  and plots finite source-grid samples without artificial spatial upscaling.
 - Horizon-specific T-120/T-90/T-60/T-30/T datasets with event-separated split and
   train-only normalization contracts; the current one-event corpus remains unsuitable
   for learned-model training.
@@ -83,13 +93,12 @@ Build causal training-data artifacts (this does not train a model):
 
 ## What is not connected
 
-The product-specific MOSDAC INSAT reader is verified against the official published
-schema using synthetic test fixtures, but no authorized real INSAT file is present;
-it is therefore not reported as a connected real source. IMD radar, lightning, and
-surface files also require authorized official files and remain generic/unverified.
-NWP uses the same explicit manual-import contract and is also unverified. Hail,
-downburst, and learned 2–6 hour forecasting remain unavailable because authoritative
-labels and a multi-event training/validation corpus are absent.
+IMD radar, lightning, and surface files still require authorized official files and
+remain unavailable for the built-in event. NWP uses the same explicit manual-import
+contract and is also unavailable. Hail, downburst, and learned 2–6 hour forecasting
+remain unavailable because authoritative labels and a multi-event training/validation
+corpus are absent. INSAT brightness temperature is supporting satellite evidence; it
+does not by itself confirm thunderstorms, hail, downbursts, or cloudbursts.
 
 See [DATA_SOURCES.md](DATA_SOURCES.md), [PROJECT_STATUS.md](PROJECT_STATUS.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [MODEL_CARD.md](MODEL_CARD.md), and

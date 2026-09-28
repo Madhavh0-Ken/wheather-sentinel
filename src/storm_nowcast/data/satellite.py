@@ -51,7 +51,7 @@ def _attr_value(attributes: h5py.AttributeManager, name: str) -> object:
 
 def _parse_insat_time(value: object, *, field: str) -> datetime:
     text = str(value).strip().removesuffix("Z")
-    for pattern in ("%d-%m-%YT%H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    for pattern in ("%d-%m-%YT%H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d-%b-%YT%H:%M:%S"):
         try:
             return datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
         except ValueError:
@@ -268,7 +268,7 @@ def load_insat3dr_l1c_asia_mer(
             "native_crs": native_crs,
             "product_creation_time": product_creation_time,
             "format_contract": "MOSDAC INSAT-3D Data Products Format Document v1.1",
-            "verification_status": "documented schema; authorized real-file verification pending",
+            "verification_status": "verified with authorized real file",
         }
     )
     return IngestedProduct(

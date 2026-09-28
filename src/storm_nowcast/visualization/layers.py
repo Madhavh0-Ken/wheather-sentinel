@@ -14,6 +14,7 @@ WGS84 = Geod(ellps="WGS84")
 OBSERVED = "#45C4E8"
 DERIVED = "#F6B73C"
 FORECAST = "#F15BB5"
+TIR1_LAYER_NAME = "INSAT-3DR TIR1 Brightness Temperature (K) — native metadata 4 km"
 
 
 def _outline(geojson: dict) -> tuple[list[float], list[float]]:
@@ -101,11 +102,63 @@ def _rainfall_grid_trace(snapshot: ReplaySnapshot) -> go.Choroplethmap:
     )
 
 
+def _insat_tir1_trace(snapshot: ReplaySnapshot) -> go.Scattermap | None:
+    evidence = snapshot.insat
+    if not evidence.available or evidence.data is None:
+        return None
+    variable = "infrared_brightness_temperature"
+    if variable not in evidence.data:
+        return None
+    values = np.asarray(evidence.data[variable].values, dtype=float)
+    missing_name = f"{variable}__missing"
+    missing = (
+        np.asarray(evidence.data[missing_name].values, dtype=bool)
+        if missing_name in evidence.data
+        else ~np.isfinite(values)
+    )
+    finite = np.isfinite(values) & ~missing
+    if not finite.any():
+        return None
+    latitudes = np.asarray(evidence.data.latitude.values, dtype=float)
+    longitudes = np.asarray(evidence.data.longitude.values, dtype=float)
+    longitude_grid, latitude_grid = np.meshgrid(longitudes, latitudes)
+    return go.Scattermap(
+        lat=latitude_grid[finite],
+        lon=longitude_grid[finite],
+        mode="markers",
+        marker={
+            "size": 6,
+            "color": values[finite],
+            "colorscale": "Turbo_r",
+            "cmin": 180,
+            "cmax": 320,
+            "opacity": 0.72,
+            "showscale": True,
+            "colorbar": {
+                "title": {"text": "K", "side": "top"},
+                "thickness": 10,
+                "len": 0.42,
+                "x": 0.985,
+                "y": 0.04,
+                "xanchor": "right",
+                "yanchor": "bottom",
+                "tickfont": {"color": "#EAF6FF"},
+            },
+        },
+        name=TIR1_LAYER_NAME,
+        hovertemplate=(
+            "OBSERVED INSAT-3DR TIR1 native source-grid sample"
+            "<br>%{marker.color:.1f} K<extra></extra>"
+        ),
+    )
+
+
 def build_map(
     snapshot: ReplaySnapshot,
     target: tuple[float, float],
     *,
     show_rainfall: bool = True,
+    show_insat: bool = False,
     event_id: str | None = None,
     bounds: Bounds | None = None,
     selected_track_id: str | None = None,
@@ -113,6 +166,10 @@ def build_map(
     figure = go.Figure()
     if show_rainfall:
         figure.add_trace(_rainfall_grid_trace(snapshot))
+    if show_insat:
+        insat_trace = _insat_tir1_trace(snapshot)
+        if insat_trace is not None:
+            figure.add_trace(insat_trace)
 
     for track in snapshot.tracks:
         selected = selected_track_id is None or selected_track_id == track.id

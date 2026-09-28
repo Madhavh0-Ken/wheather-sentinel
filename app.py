@@ -6,6 +6,7 @@ import time
 from datetime import datetime, time as clock_time, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import xarray as xr
@@ -15,11 +16,17 @@ from storm_nowcast.alerts.engine import AlertEngine, AlertRule
 from storm_nowcast.confidence.framework import estimate_forecast_confidence
 from storm_nowcast.data.provenance import read_manifest
 from storm_nowcast.data.cmorph_cache import CmorphCache
+from storm_nowcast.data.insat_replay import (
+    build_insat_replay_cube,
+    insat_directory_revision,
+)
 from storm_nowcast.data.sources import (
     CmorphSource,
     ImdLightningSource,
     ImdRadarSource,
+    ImdStationSource,
     MosdacSatelliteSource,
+    NwpSource,
 )
 from storm_nowcast.evaluation import evaluate_forecasts
 from storm_nowcast.events.builder import BuildStage, CmorphEventBuilder
@@ -43,6 +50,7 @@ from storm_nowcast.visualization.region import build_region_preview
 from storm_nowcast.visualization.panels import (
     hazard_rows,
     resolve_operating_mode,
+    satellite_evidence_rows,
     sensor_availability_rows,
 )
 
@@ -110,6 +118,80 @@ def observation_mode(path: Path) -> tuple[str, str]:
 @st.cache_resource(show_spinner=False)
 def load_event(path: str) -> xr.Dataset:
     return xr.load_dataset(path, engine="h5netcdf")
+
+
+@st.cache_resource(show_spinner=False)
+def load_insat_cube(
+    path: str,
+    target_time_ns: tuple[int, ...],
+    event_start: datetime,
+    event_end: datetime,
+    max_age_minutes: int,
+    revision: tuple[tuple[str, int, int], ...],
+) -> xr.Dataset | None:
+    del revision
+    return build_insat_replay_cube(
+        Path(path),
+        target_times=tuple(np.datetime64(value, "ns") for value in target_time_ns),
+        event_start=event_start,
+        event_end=event_end,
+        max_age_minutes=max_age_minutes,
+    )
+
+
+def event_insat_cube(dataset: xr.Dataset, record: EventLibraryRecord) -> xr.Dataset | None:
+    path = record.insat_data_path
+    if path is None or not path.is_dir():
+        return None
+    target_time_ns = tuple(
+        int(value.astype("datetime64[ns]").astype(np.int64))
+        for value in dataset.time.values
+    )
+    return load_insat_cube(
+        str(path),
+        target_time_ns,
+        record.start_time,
+        record.end_time,
+        record.insat_max_age_minutes,
+        insat_directory_revision(path),
+    )
+
+
+def source_readiness_statuses(
+    *,
+    satellite_available: bool,
+    satellite_data_path: Path | None,
+):
+    return [
+        CmorphSource().status(),
+        MosdacSatelliteSource().status(
+            available=satellite_available,
+            data_path=satellite_data_path,
+        ),
+        ImdRadarSource().status(),
+        ImdLightningSource().status(),
+        ImdStationSource().status(),
+        NwpSource().status(),
+    ]
+
+
+def _render_source_readiness(
+    *,
+    satellite_available: bool,
+    satellite_data_path: Path | None,
+) -> None:
+    st.sidebar.header("Source readiness")
+    for status in source_readiness_statuses(
+        satellite_available=satellite_available,
+        satellite_data_path=satellite_data_path,
+    ):
+        marker = "REAL / AVAILABLE" if status.available else "UNAVAILABLE"
+        st.sidebar.markdown(f"**{status.source}**  \n`{marker}`  \n{status.message}")
+    st.sidebar.divider()
+    st.sidebar.caption(
+        "NOAA CPC CMORPH supplies precipitation estimates. ISRO/SAC MOSDAC INSAT-3DR "
+        "supplies calibrated satellite brightness temperatures. Neither source is weather radar."
+    )
 
 
 def _css() -> None:
@@ -195,7 +277,7 @@ def _css() -> None:
     )
 
 
-def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
+def _source_sidebar(settings) -> tuple[object, bool, bool, EventLibraryRecord, str]:
     st.sidebar.header("Operations")
     pending_workflow = st.session_state.pop("_pending_operating_workflow", None)
     if pending_workflow is not None:
@@ -253,27 +335,29 @@ def _source_sidebar(settings) -> tuple[object, bool, EventLibraryRecord, str]:
                 fallback = next(option for option in options if option != selected_record.event_id)
                 st.session_state._pending_event_id = fallback
                 st.rerun()
+    layer_options = ["CMORPH rainfall"]
+    if (
+        selected_record.insat_data_path is not None
+        and selected_record.insat_data_path.is_dir()
+        and any(selected_record.insat_data_path.glob("*.nc"))
+    ):
+        layer_options.append(
+            "INSAT-3DR TIR1 Brightness Temperature (K) — native metadata 4 km"
+        )
     selected_layers = st.sidebar.multiselect(
         "Observation layers",
-        options=("CMORPH rainfall",),
+        options=layer_options,
         default=("CMORPH rainfall",),
         help="Only layers backed by available observations can be enabled.",
     )
-    st.sidebar.header("Source readiness")
-    for status in (
-        CmorphSource().status(),
-        MosdacSatelliteSource().status(),
-        ImdRadarSource().status(),
-        ImdLightningSource().status(),
-    ):
-        marker = "VERIFIED REAL DATA" if status.verified_with_real_data else "OFFICIAL INPUT REQUIRED"
-        st.sidebar.markdown(f"**{status.source}**  \n`{marker}`  \n{status.message}")
-    st.sidebar.divider()
-    st.sidebar.caption(
-        "CMORPH is a satellite precipitation estimate—not radar. Grid spacing is approximately "
-        "8 km; effective source resolution is coarser."
+    return (
+        mode,
+        "CMORPH rainfall" in selected_layers,
+        "INSAT-3DR TIR1 Brightness Temperature (K) — native metadata 4 km"
+        in selected_layers,
+        selected_record,
+        requested_mode,
     )
-    return mode, "CMORPH rainfall" in selected_layers, selected_record, requested_mode
 
 
 ERROR_COPY = {
@@ -411,7 +495,14 @@ def _render_region_preparation(settings) -> None:
         st.rerun()
 
 
-def _track_readout(track, eta, *, observation_time: datetime, target: tuple[float, float]) -> None:
+def _track_readout(
+    track,
+    eta,
+    *,
+    observation_time: datetime,
+    target: tuple[float, float],
+    evidence,
+) -> None:
     direction = "Unavailable" if track.bearing_deg is None else f"{track.bearing_deg:.0f}°"
     trend = "Increasing" if track.intensity_trend_mm_hr_per_hour > 1 else (
         "Weakening" if track.intensity_trend_mm_hr_per_hour < -1 else "Steady"
@@ -438,14 +529,15 @@ def _track_readout(track, eta, *, observation_time: datetime, target: tuple[floa
         """,
         unsafe_allow_html=True,
     )
-    twin = build_multisensor_twin(track, [])
+    twin = build_multisensor_twin(track, evidence)
     confidence = estimate_forecast_confidence(twin, lead_minutes=30)
     ci = score_convective_initiation({"rain_rate": track.current.max_intensity})
+    available_sensors = 1 + len({item.sensor for item in evidence})
     st.markdown(
         f"""
         <div class="readout">
           <h3>Sensor evidence & evidence-quality estimate</h3>
-          <dl><dt>Available sensors</dt><dd>Rainfall 1 / 6</dd>
+          <dl><dt>Available sensors</dt><dd>{available_sensors} / 6</dd>
           <dt>Evidence quality at +30 min</dt><dd>{confidence.label}</dd>
           <dt>Estimate kind</dt><dd>Input-quality heuristic</dd>
           <dt>Convective Initiation Score</dt><dd>Unavailable</dd></dl>
@@ -521,7 +613,9 @@ def main() -> None:
     st.set_page_config(page_title="StormNowcast", page_icon="SN", layout="wide")
     _css()
     settings = load_settings()
-    mode, show_rainfall, selected_event, requested_workflow = _source_sidebar(settings)
+    mode, show_rainfall, show_insat, selected_event, requested_workflow = _source_sidebar(
+        settings
+    )
     event_path = selected_event.data_path
     st.title("StormNowcast")
     mode_label, mode_class = observation_mode(event_path)
@@ -529,7 +623,7 @@ def main() -> None:
         f"""
         <div class="status-mast">
           <div class="product-deck">Regional precipitation movement prototype · historical observation replay</div>
-          <div class="signal {mode_class}"><span class="status-dot"></span><b>{mode_label}</b><span>NOAA CPC · CMORPH</span></div>
+          <div class="signal {mode_class}"><span class="status-dot"></span><b>{mode_label}</b><span>NOAA CPC CMORPH + ISRO/SAC MOSDAC INSAT-3DR</span></div>
         </div>
         <div class="class-strip"><span class="observed">Observed grid</span><span class="derived">Derived analytics</span><span class="forecast">Deterministic forecast</span><span class="target">Target</span></div>
         """,
@@ -546,7 +640,12 @@ def main() -> None:
         return
 
     dataset = load_event(str(event_path))
-    player = ReplayPlayer(dataset, settings)
+    satellite_cube = event_insat_cube(dataset, selected_event)
+    player = ReplayPlayer(dataset, settings, satellite_cube=satellite_cube)
+    _render_source_readiness(
+        satellite_available=satellite_cube is not None,
+        satellite_data_path=selected_event.insat_data_path,
+    )
     default_frame = max(0, player.frame_count - 3)
     dataset_bounds = selected_event.bounding_box or Bounds(
         min_lat=float(dataset.latitude.values.min()),
@@ -613,6 +712,7 @@ def main() -> None:
                 snapshot,
                 target,
                 show_rainfall=show_rainfall,
+                show_insat=show_insat,
                 event_id=selected_event.event_id,
                 bounds=dataset_bounds,
                 selected_track_id=selected_id,
@@ -645,19 +745,43 @@ def main() -> None:
                 snapshot.eta_by_track[track.id],
                 observation_time=snapshot.timestamp,
                 target=target,
+                evidence=snapshot.sensor_evidence_by_track[track.id],
             )
         else:
             st.info("No Intense Precipitation Cell meets the configured threshold in this frame.", icon=None)
 
-    with st.expander("Sensor evidence at this analysis cut Â· 1 available / 4 displayed"):
+    availability_rows = sensor_availability_rows(snapshot.timestamp, snapshot.insat)
+    available_count = sum(
+        row["Availability"] == "AVAILABLE" for row in availability_rows
+    )
+    with st.expander(
+        f"Sensor evidence at this analysis cut · {available_count} available / 6 displayed"
+    ):
         st.dataframe(
-            pd.DataFrame(sensor_availability_rows(snapshot.timestamp)),
+            pd.DataFrame(availability_rows),
             hide_index=True,
             width="stretch",
         )
         st.caption(
             "Native and processed resolution are shown separately. Resampling a coarse source never creates finer physical observations."
         )
+        if snapshot.insat.available:
+            st.write(
+                f"ISRO/SAC MOSDAC INSAT-3DR observation {snapshot.insat.observation_time:%Y-%m-%d %H:%M UTC} "
+                f"· age {snapshot.insat.age_minutes:g} min · {snapshot.insat.product}"
+            )
+            st.dataframe(
+                pd.DataFrame(satellite_evidence_rows(snapshot.insat)),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                f"Source file: {snapshot.insat.source_file} · record: {snapshot.insat.source_record_id}"
+            )
+        else:
+            st.caption(
+                "INSAT-3DR is unavailable or stale for this frame; no later or over-age observation is carried forward."
+            )
 
     st.subheader("Forecast vs later observation")
     metrics = evaluate_forecasts(snapshot.tracks, player.all_tracks())
@@ -693,10 +817,21 @@ def main() -> None:
                 st.json(json.loads(provenance_path.read_text(encoding="utf-8")))
         else:
             st.warning("Provenance manifest is missing. Re-run the preparation command.", icon=None)
+        if snapshot.insat.available and snapshot.insat.provenance is not None:
+            st.write(
+                f"1 official ISRO/SAC MOSDAC INSAT-3DR source file · "
+                f"{snapshot.insat.product} · observed {snapshot.insat.observation_time:%Y-%m-%d %H:%M UTC}"
+            )
+            with st.expander("Inspect INSAT-3DR source record"):
+                st.json(snapshot.insat.provenance)
+        else:
+            st.caption("No valid INSAT-3DR provenance is attached to this replay frame.")
     with info_right:
         st.subheader("Scientific limitations")
         st.markdown(
             "- CMORPH is a satellite precipitation estimate, not weather radar.\n"
+            "- INSAT TIR1 and water-vapour fields are calibrated brightness temperatures, not rainfall estimates.\n"
+            "- Brightness temperature alone does not confirm thunderstorms, hail, downbursts, or cloudbursts.\n"
             "- The approximately 8 km grid spacing does not imply 1–3 km source observations; effective resolution is coarser.\n"
             "- Intense Precipitation Cells are rainfall-derived objects, not confirmed thunderstorms.\n"
             "- Prototype Extreme Rain Risk is an unvalidated heuristic, not cloudburst detection.\n"

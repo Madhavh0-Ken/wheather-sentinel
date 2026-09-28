@@ -62,6 +62,24 @@ def test_target_outside_event_bounds_is_detected():
     assert app.target_outside_bounds((13, 76), bounds) is True
 
 
+def test_source_readiness_reports_real_cmorph_and_event_insat_without_enabling_other_sources(
+    tmp_path,
+):
+    statuses = app.source_readiness_statuses(
+        satellite_available=True,
+        satellite_data_path=tmp_path / "insat",
+    )
+    by_source = {status.source: status for status in statuses}
+
+    assert by_source["CMORPH V0.x RAW 8km-30min"].available is True
+    assert by_source["ISRO MOSDAC INSAT"].available is True
+    assert by_source["ISRO MOSDAC INSAT"].data_path == str(tmp_path / "insat")
+    assert by_source["India Meteorological Department Doppler Weather Radar"].available is False
+    assert by_source["India Meteorological Department lightning observations"].available is False
+    assert by_source["India Meteorological Department surface observations"].available is False
+    assert by_source["Numerical weather prediction"].available is False
+
+
 def test_analyze_new_region_workflow_is_present_without_starting_download():
     result = AppTest.from_file(Path(__file__).parents[1] / "app.py").run(timeout=30)
 
