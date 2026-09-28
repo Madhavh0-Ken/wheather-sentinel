@@ -51,7 +51,7 @@ def _attr_value(attributes: h5py.AttributeManager, name: str) -> object:
 
 def _parse_insat_time(value: object, *, field: str) -> datetime:
     text = str(value).strip().removesuffix("Z")
-    for pattern in ("%d-%m-%YT%H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    for pattern in ("%d-%m-%YT%H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d-%b-%YT%H:%M:%S"):
         try:
             return datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
         except ValueError:

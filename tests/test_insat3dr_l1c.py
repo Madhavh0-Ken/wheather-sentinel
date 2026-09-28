@@ -16,6 +16,8 @@ def _write_l1c_fixture(
     sensor_id="IMG",
     counts=None,
     include_wv=False,
+    acquisition_start="09-07-2023T00:00:00",
+    acquisition_end="09-07-2023T00:26:00",
 ):
     geographic = CRS.from_epsg(4326)
     mercator = CRS.from_proj4(
@@ -46,8 +48,8 @@ def _write_l1c_fixture(
                 "Product_Type": "SECTOR",
                 "Acquisition_Date": "09JUL2023",
                 "Acquisition_Time_in_GMT": "0000",
-                "Acquisition_Start_Time": "09-07-2023T00:00:00",
-                "Acquisition_End_Time": "09-07-2023T00:26:00",
+                "Acquisition_Start_Time": acquisition_start,
+                "Acquisition_End_Time": acquisition_end,
                 "Product_Creation_Time": "2023-07-09T00:35:00",
                 "HDF_Product_File_Name": path.name,
             }
@@ -142,6 +144,40 @@ def test_l1c_reader_labels_wv_channel_as_brightness_temperature_not_humidity(tmp
     assert "water_vapour_brightness_temperature" in product.dataset
     assert "water_vapour" not in product.dataset
     assert product.lineage["water_vapour_brightness_temperature"].native_spatial_resolution.grid_spacing_km == 8.0
+
+
+def test_l1c_reader_parses_real_mosdac_acquisition_times_as_utc(tmp_path):
+    path = tmp_path / "3RIMG_09JUL2023_2345_L1C_ASIA_MER_V01R00.h5"
+    _write_l1c_fixture(
+        path,
+        acquisition_start="09-JUL-2023T23:45:28",
+        acquisition_end="10-JUL-2023T00:12:22",
+    )
+
+    product = _reader()(
+        path,
+        bounds=Bounds(min_lat=29.0, max_lat=33.0, min_lon=74.0, max_lon=78.0),
+        is_synthetic=True,
+    )
+
+    assert product.temporal_support.observation_start == datetime(
+        2023, 7, 9, 23, 45, 28, tzinfo=timezone.utc
+    )
+    assert product.temporal_support.observation_end == datetime(
+        2023, 7, 10, 0, 12, 22, tzinfo=timezone.utc
+    )
+
+
+def test_l1c_reader_rejects_malformed_mosdac_acquisition_time(tmp_path):
+    path = tmp_path / "malformed-acquisition-time.h5"
+    _write_l1c_fixture(path, acquisition_start="31-FEB-2023T23:45:28")
+
+    with pytest.raises(ValueError, match="Invalid Acquisition_Start_Time"):
+        _reader()(
+            path,
+            bounds=Bounds(min_lat=29.0, max_lat=33.0, min_lon=74.0, max_lon=78.0),
+            is_synthetic=True,
+        )
 
 
 @pytest.mark.parametrize(
