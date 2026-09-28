@@ -23,6 +23,17 @@ class SensorEvidence(BaseModel):
     _utc_timestamp = field_validator("timestamp", mode="before")(_as_utc)
 
 
+class SatelliteVariableSummary(BaseModel):
+    name: str
+    source_variable: str
+    units: str
+    calibration_lookup_table: str | None = None
+    native_spatial_resolution_km: float | None = Field(default=None, gt=0)
+    available: bool
+    missing_pixel_count: int = Field(ge=0)
+    total_pixel_count: int = Field(gt=0)
+
+
 class MultiSensorStormCell(BaseModel):
     baseline: StormCell
     evidence_history: list[SensorEvidence] = Field(default_factory=list)

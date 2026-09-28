@@ -17,6 +17,8 @@ def test_cmorph_only_analysis_contract_remains_stable():
     assert [point.lead_minutes for point in track.forecasts] == [30, 60, 120]
     assert [point.uncertainty_km for point in track.forecasts] == [21.0, 30.0, 48.0]
     assert snapshot.eta_by_track[track.id].closest_lead_minutes == 30
+    assert snapshot.insat.available is False
+    assert snapshot.sensor_evidence_by_track[track.id] == []
 
 
 def test_new_sensor_features_are_disabled_by_default():

@@ -58,6 +58,10 @@ def _variable_attrs(
         "temporal_tolerance_minutes": policy.temporal_tolerance_minutes,
         "is_synthetic": product.asset.is_synthetic,
     }
+    for name in ("source_variable", "calibration_lookup_table"):
+        value = product.dataset[variable].attrs.get(name)
+        if value is not None:
+            attrs[name] = value
     if native_km is not None and grid.resolution_km < native_km:
         attrs["physical_resolution_warning"] = (
             f"Resampling a {native_km:g} km native grid onto a {grid.resolution_km:g} km analysis grid "

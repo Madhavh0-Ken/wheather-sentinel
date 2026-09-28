@@ -230,6 +230,8 @@ def test_real_event_uses_all_twelve_expected_causal_mappings_at_fifteen_minutes(
     )
     assert excluded not in cube["infrared_brightness_temperature__source_file"].values
     assert cube["infrared_brightness_temperature__available"].values.tolist() == [True] * 12
+    assert cube.infrared_brightness_temperature.attrs["source_variable"] == "IMG_TIR1"
+    assert cube.infrared_brightness_temperature.attrs["calibration_lookup_table"] == "IMG_TIR1_TEMP"
 
 
 def test_causal_alignment_never_selects_a_future_observation(tmp_path):
