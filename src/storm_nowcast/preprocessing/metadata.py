@@ -8,7 +8,7 @@ import xarray as xr
 def validate_resolution_claims(dataset: xr.Dataset) -> xr.Dataset:
     """Reject fused variables that hide native resolution or imply false precision."""
     for name, variable in dataset.data_vars.items():
-        if name.endswith("__missing"):
+        if name.endswith("__missing") or variable.attrs.get("metadata_role") == "alignment_metadata":
             continue
         required = {
             "native_spatial_resolution_km",

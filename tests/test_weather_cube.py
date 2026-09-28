@@ -72,6 +72,27 @@ def test_weather_cube_temporal_tolerance_does_not_reuse_stale_scan(tmp_path):
     assert cube.infrared_brightness_temperature.isel(time=1).isnull().all()
 
 
+def test_weather_cube_backward_policy_does_not_select_future_scan(tmp_path):
+    product = _satellite_product(tmp_path)
+    grid = TargetGridSpec(latitudes=(30.0, 31.0), longitudes=(76.0, 77.0), resolution_km=3.0)
+
+    cube = build_weather_cube(
+        [product],
+        grid=grid,
+        target_times=(np.datetime64("2023-07-08T23:50:00"),),
+        policies={
+            "infrared_brightness_temperature": ResamplingPolicy(
+                spatial_method="nearest",
+                temporal_tolerance_minutes=30,
+                temporal_method="backward",
+            )
+        },
+    )
+
+    assert cube.infrared_brightness_temperature.isnull().all()
+    assert cube.infrared_brightness_temperature__available.values.tolist() == [False]
+
+
 def test_weather_cube_rejects_duplicate_canonical_variables(tmp_path):
     product = _satellite_product(tmp_path)
     grid = TargetGridSpec(latitudes=(30.0, 31.0), longitudes=(76.0, 77.0), resolution_km=3.0)
