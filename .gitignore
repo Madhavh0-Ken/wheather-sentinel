@@ -16,3 +16,13 @@ data/processed/*
 data/demo/*
 data/events/custom/*
 !data/**/.gitkeep
+
+# Real downloaded MOSDAC satellite data
+data/manual/mosdac_satellite/*.h5
+
+# Generated INSAT processed artifacts
+data/processed/insat/*.nc
+data/processed/insat/*.json
+
+# Local debug output
+insat_error.txt
