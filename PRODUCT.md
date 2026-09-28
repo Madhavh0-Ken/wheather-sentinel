@@ -33,7 +33,7 @@ The principal workflow is historical replay over a configurable Indian study are
 - Rainfall-derived objects are named “Intense Precipitation Cells,” never confirmed thunderstorms.
 - The heuristic output is named “Prototype Extreme Rain Risk,” never cloudburst detection.
 - Forecast leads are +30, +60, and +120 minutes and use deterministic motion extrapolation with increasing uncertainty.
-- MOSDAC INSAT and IMD radar/lightning are future-compatible official adapters whose authentication or manual-file requirements cannot block the CMORPH path.
+- Authorized local MOSDAC INSAT-3DR observations can attach as optional causal evidence; IMD radar/lightning remain future-compatible adapters, and none of these paths can block CMORPH-only replay.
 - Synthetic observations are restricted to tests and must be visibly and programmatically marked.
 
 ## Brand Commitments
@@ -42,7 +42,7 @@ The product name is StormNowcast. Voice is operational, direct, calm, and explic
 
 ## Evidence on Hand
 
-- A cached official NOAA CPC CMORPH event over Himachal Pradesh and nearby north-west India, 2023-07-09 00:00–05:30 UTC, with 12 half-hour frames.
+- A cached official NOAA CPC CMORPH event over Himachal Pradesh and nearby north-west India, 2023-07-09 00:00–05:30 UTC, with 12 half-hour frames and optional preceding-quarter-hour MOSDAC INSAT-3DR evidence.
 - Per-file official URLs, acquisition times, processing steps, and SHA-256 checksums in the provenance manifest.
 - Real derived cell tracks and calculated +30/+60 forecast verification metrics.
 - No operational validation study, confirmed thunderstorm labels, cloudburst labels, customer claims, or fabricated accuracy metrics exist and none may be invented.

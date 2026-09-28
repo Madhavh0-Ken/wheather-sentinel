@@ -1,16 +1,16 @@
 # Project status
 
-Status date: 2026-09-26. Protected fallback: git commit `3d0a01a`.
+Status date: 2026-09-28. Protected fallback: git commit `3d0a01a`.
 
-Latest verification in this checkout: **160 tests passed, 0 failed, 1
-platform-dependent symlink test skipped** before final documentation verification.
+Latest verification in this checkout: **210 tests passed, 0 failed, 1
+platform-dependent symlink test skipped** after the real INSAT replay integration.
 Built-in and offline custom-event smoke paths plus Streamlit/API health are part of
 the final handoff checklist.
 
 | Capability | Status | Qualification |
 |---|---|---|
 | CMORPH acquisition/parser/extraction | ✅ COMPLETE | Official NOAA CPC source; 12 cached regional frames |
-| Historical replay and map | ✅ COMPLETE | 30-minute causal replay; online basemap may be unavailable offline |
+| Historical replay and map | ✅ COMPLETE | 30-minute causal replay with optional native-grid TIR1 layer; online basemap may be unavailable offline |
 | Cell detection/tracking | ✅ COMPLETE | Rainfall-derived Intense Precipitation Cells, not confirmed thunderstorms |
 | Track speed/direction/intensity trend | ✅ COMPLETE | Derived from cell histories |
 | +30/+60/+120 movement forecast | ✅ COMPLETE baseline | Deterministic extrapolation with heuristic uncertainty |
@@ -18,10 +18,11 @@ the final handoff checklist.
 | Prototype Extreme Rain Risk | ✅ COMPLETE baseline | Uncalibrated and not cloudburst detection |
 | Real-event evaluation | 🟡 PARTIAL | One sample each at +30 and +60 for the default analysis cut; +120 insufficient |
 | Multi-sensor source/provenance contracts | ✅ COMPLETE | Typed metadata and explicit missing states |
-| MOSDAC INSAT-3DR L1C reader | 🟡 PARTIAL | Product-specific schema tests pass; authenticated real file required |
-| Generic MOSDAC/IMD/NWP local-file adapters | 🟡 PARTIAL | Official authenticated or user-supplied samples are the blocker |
+| MOSDAC INSAT-3DR L1C reader | ✅ COMPLETE | Genuine `3RIMG_L1C_ASIA_MER` files verified; TIR1/WV calibrated to kelvin with provenance |
+| Optional INSAT replay evidence | ✅ COMPLETE | Backward-only, 30-minute maximum age, explicit masks; built-in mapping is 12 frames at 15 minutes |
+| Generic IMD/NWP local-file adapters | 🟡 PARTIAL | Official authenticated or user-supplied samples are the blocker |
 | Resolution-aware weather cube | ✅ COMPLETE | Missing masks and lineage; no silent imputation |
-| Multi-sensor digital twin | ✅ COMPLETE | Current real event has rainfall evidence only |
+| Multi-sensor digital twin | ✅ COMPLETE | Built-in event carries CMORPH analysis plus optional causal INSAT evidence |
 | Convective Initiation Score | 🟡 PARTIAL | Implemented but unavailable with CMORPH alone; precursor evidence required |
 | Lightning jump analytics | 🟡 PARTIAL | Implemented; no verified lightning file connected |
 | Raster +10 to +120 minute translation nowcast | 🟡 PARTIAL | Tested with synthetic fields; not enabled in the real replay |
@@ -72,14 +73,12 @@ StormNowcast/
 
 ## Next data-based work
 
-1. Download the requested authorized MOSDAC `3RIMG_L1C_ASIA_MER` files for
-   2023-07-09 00:00-05:30 UTC and run the product-specific importer.
-2. Obtain one authorized IMD radar/lightning sample with metadata documentation.
-3. Compare decoded INSAT metadata/ranges against the authorized file and retain only
-   non-restricted structural fixtures.
-4. Assemble multiple independent Indian rainfall events and evaluate by event-grouped
+1. Obtain one authorized IMD radar/lightning sample with metadata documentation.
+2. Retain only non-restricted INSAT structural fixtures; genuine local source and
+   processed files remain ignored.
+3. Assemble multiple independent Indian rainfall events and evaluate by event-grouped
    chronological splits.
-5. Enable raster nowcasting on the real replay only after its field mapping and
+4. Enable raster nowcasting on the real replay only after its field mapping and
    evaluation are demonstrated.
-6. Consider learned hail/downburst or 2–6 hour models only after authoritative labels
+5. Consider learned hail/downburst or 2–6 hour models only after authoritative labels
    and environmental predictors exist.
