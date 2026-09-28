@@ -21,6 +21,7 @@ from storm_nowcast.data.sources import (
     ImdRadarSource,
     ImdStationSource,
     MosdacSatelliteSource,
+    NwpSource,
 )
 from storm_nowcast.evaluation import evaluate_forecasts
 from storm_nowcast.events.builder import CmorphEventBuilder
@@ -128,15 +129,38 @@ def create_app(
         }
 
     @application.get("/sources")
-    def sources() -> list[dict]:
-        adapters = (
-            CmorphSource(),
-            MosdacSatelliteSource(),
-            ImdRadarSource(),
-            ImdLightningSource(),
-            ImdStationSource(),
+    def sources(event_id: str | None = None) -> list[dict]:
+        satellite_available = False
+        satellite_path: Path | None = None
+        try:
+            current = service(event_id)
+        except HTTPException:
+            current = None
+        if current is not None and current.player.satellite_cube is not None:
+            cube = current.player.satellite_cube
+            availability = cube.get("infrared_brightness_temperature__available")
+            satellite_available = bool(
+                availability is not None and availability.values.astype(bool).any()
+            )
+            try:
+                if event_id is None:
+                    satellite_path = catalog.get(current.event_id).insat_data_path
+                else:
+                    satellite_path = repository.get(event_id).insat_data_path
+            except (KeyError, EventOperationError):
+                satellite_path = None
+        statuses = (
+            CmorphSource().status(),
+            MosdacSatelliteSource().status(
+                available=satellite_available,
+                data_path=satellite_path,
+            ),
+            ImdRadarSource().status(),
+            ImdLightningSource().status(),
+            ImdStationSource().status(),
+            NwpSource().status(),
         )
-        return [adapter.status().model_dump(mode="json") for adapter in adapters]
+        return [status.model_dump(mode="json") for status in statuses]
 
     @application.get("/events")
     def events() -> list[dict]:

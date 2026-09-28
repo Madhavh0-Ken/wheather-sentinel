@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -42,16 +43,24 @@ class CmorphSource:
 
 
 class MosdacSatelliteSource:
-    def status(self) -> SourceStatus:
+    def status(
+        self,
+        *,
+        available: bool = False,
+        data_path: Path | None = None,
+    ) -> SourceStatus:
         return SourceStatus(
             source="ISRO MOSDAC INSAT",
-            available=False,
+            available=available,
             authentication_required=True,
             manual_file_required=True,
             implemented=True,
+            verified_with_real_data=True,
+            data_path=str(data_path) if data_path is not None else None,
             message=(
-                "Product-specific loading is not yet verified; authenticated MOSDAC "
-                "access and an official file are required."
+                "Verified real ISRO/SAC MOSDAC 3RIMG_L1C_ASIA_MER observations are available."
+                if available
+                else "Authenticated MOSDAC access and an official 3RIMG_L1C_ASIA_MER file are required."
             ),
         )
 
@@ -92,4 +101,15 @@ class ImdStationSource:
             manual_file_required=True,
             implemented=True,
             message="Loading is not yet verified; provide an official IMD station file.",
+        )
+
+
+class NwpSource:
+    def status(self) -> SourceStatus:
+        return SourceStatus(
+            source="Numerical weather prediction",
+            available=False,
+            manual_file_required=True,
+            implemented=True,
+            message="No official NWP dataset is configured for this event.",
         )

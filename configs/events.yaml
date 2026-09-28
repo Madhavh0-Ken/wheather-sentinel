@@ -6,9 +6,13 @@ events:
     observation_end: "2023-07-09T05:30:00Z"
     sources:
       - NOAA CPC CMORPH V0.x RAW 8km-30min
+      - ISRO/SAC MOSDAC INSAT-3DR 3RIMG_L1C_ASIA_MER
     frame_count: 12
     data_path: data/processed/cmorph_india_event.nc
+    insat_data_path: data/processed/insat
+    insat_max_age_minutes: 30
     limitations:
       - One event is a demonstration and does not establish general forecast accuracy.
       - CMORPH is a satellite precipitation estimate on an approximately 8 km grid with coarser effective resolution.
-      - No radar, lightning, satellite-channel, surface, or NWP observations are included in this event.
+      - INSAT brightness temperature is satellite evidence, not a precipitation estimate or confirmation of a thunderstorm.
+      - No radar, lightning, surface, or NWP observations are included in this event.

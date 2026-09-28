@@ -127,6 +127,11 @@ def test_repository_merges_immutable_builtin_and_validated_custom_events(tmp_pat
     assert custom.ready is True
     assert custom.data_path == custom_root / EVENT_ID / "event.nc"
     assert repository.validate_ready(EVENT_ID).schema_version == 1
+    builtin = repository.get("builtin-event")
+    assert builtin.sources == ["NOAA CPC CMORPH"]
+    assert builtin.insat_data_path is None
+    assert custom.sources == ["NOAA Climate Prediction Center CMORPH V0.x RAW 8km-30min"]
+    assert custom.insat_data_path is None
 
 
 def test_custom_event_cannot_duplicate_a_builtin_identity(tmp_path):
