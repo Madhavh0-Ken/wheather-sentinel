@@ -1,9 +1,14 @@
 from dataclasses import replace
 
+import numpy as np
+
 from storm_nowcast.config import Bounds, load_settings
 from storm_nowcast.replay.player import ReplayPlayer
 from storm_nowcast.visualization.layers import build_map
-from tests.test_replay import replay_dataset
+from tests.test_replay import replay_dataset, satellite_cube
+
+
+TIR1_LAYER_NAME = "INSAT-3DR TIR1 Brightness Temperature (K) — native metadata 4 km"
 
 
 def test_map_exposes_observed_derived_and_forecast_layer_classes():
@@ -85,3 +90,43 @@ def test_selected_track_keeps_full_emphasis_while_other_tracks_are_quiet():
 
     assert selected.line.width > other.line.width
     assert selected.opacity > other.opacity
+
+
+def test_insat_tir1_layer_plots_each_finite_native_sample_without_interpolation():
+    cube = satellite_cube()
+    cube["infrared_brightness_temperature"].values[1, 0, 0] = np.nan
+    cube["infrared_brightness_temperature__missing"].values[1, 0, 0] = True
+    snapshot = ReplayPlayer(
+        replay_dataset(), load_settings(), satellite_cube=cube
+    ).analyze(1, target=(30.1, 75.3))
+
+    figure = build_map(snapshot, target=(30.1, 75.3), show_insat=True)
+    tir1 = next(trace for trace in figure.data if trace.name == TIR1_LAYER_NAME)
+
+    assert tir1.type == "scattermap"
+    assert tir1.mode == "markers"
+    assert len(tir1.lat) == 11
+    assert len(tir1.lon) == 11
+    assert len(tir1.marker.color) == 11
+    assert tir1.marker.colorbar.title.text == "K"
+    assert "native source-grid sample" in tir1.hovertemplate
+
+
+def test_insat_tir1_layer_is_absent_when_disabled_or_frame_is_unavailable():
+    settings = load_settings()
+    available = ReplayPlayer(
+        replay_dataset(), settings, satellite_cube=satellite_cube()
+    ).analyze(1, target=(30.1, 75.3))
+    unavailable = ReplayPlayer(replay_dataset(), settings).analyze(
+        1, target=(30.1, 75.3)
+    )
+
+    disabled_names = {
+        trace.name for trace in build_map(available, (30.1, 75.3), show_insat=False).data
+    }
+    unavailable_names = {
+        trace.name for trace in build_map(unavailable, (30.1, 75.3), show_insat=True).data
+    }
+
+    assert TIR1_LAYER_NAME not in disabled_names
+    assert TIR1_LAYER_NAME not in unavailable_names
