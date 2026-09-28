@@ -8,8 +8,14 @@ import numpy as np
 import xarray as xr
 
 from storm_nowcast.data.manual import IngestedProduct
+from storm_nowcast.data.satellite import _parse_insat_time
 from storm_nowcast.fusion.cube import ResamplingPolicy, TargetGridSpec, build_weather_cube
-from storm_nowcast.models.sensors import RawAsset, TemporalSupport, VariableLineage
+from storm_nowcast.models.sensors import (
+    RawAsset,
+    SpatialResolution,
+    TemporalSupport,
+    VariableLineage,
+)
 
 
 INSAT_PROVIDER = "ISRO/SAC MOSDAC"
@@ -54,11 +60,19 @@ def _validate_processed_dataset(dataset: xr.Dataset, path: Path) -> None:
     required_coords = {"time", "latitude", "longitude"}
     if not required_coords.issubset(dataset.coords):
         raise ValueError(f"Processed INSAT coordinates are incomplete in {path.name}")
-    if "infrared_brightness_temperature" not in dataset.data_vars:
-        raise ValueError(f"Processed INSAT TIR1 brightness temperature is missing in {path.name}")
-    unsupported = set(dataset.data_vars) - set(INSAT_VARIABLES)
-    if unsupported:
-        raise ValueError(f"Unsupported processed INSAT variables in {path.name}: {sorted(unsupported)}")
+    if set(dataset.data_vars) != set(INSAT_VARIABLES):
+        raise ValueError(
+            f"Processed INSAT variables are incomplete or unsupported in {path.name}: "
+            f"expected {sorted(INSAT_VARIABLES)}, got {sorted(dataset.data_vars)}"
+        )
+    if dataset.attrs.get("crs") != "EPSG:4326":
+        raise ValueError(f"Processed INSAT analysis CRS must be EPSG:4326 in {path.name}")
+    if "Mercator" not in str(dataset.attrs.get("native_crs", "")):
+        raise ValueError(f"Processed INSAT native CRS must identify Mercator in {path.name}")
+    if dataset.attrs.get("format_contract") != (
+        "MOSDAC INSAT-3D Data Products Format Document v1.1"
+    ):
+        raise ValueError(f"Invalid processed INSAT format contract in {path.name}")
     for variable in dataset.data_vars:
         values = dataset[variable]
         source_variable, lookup = INSAT_VARIABLES[variable]
@@ -75,6 +89,77 @@ def _validate_processed_dataset(dataset: xr.Dataset, path: Path) -> None:
         for key, expected_value in expected.items():
             if values.attrs.get(key) != expected_value:
                 raise ValueError(f"Invalid processed INSAT {key} for {variable} in {path.name}")
+
+
+def _validate_processed_provenance(
+    dataset: xr.Dataset,
+    path: Path,
+    *,
+    asset: RawAsset,
+    lineage: dict[str, VariableLineage],
+    temporal_support: TemporalSupport,
+) -> None:
+    observation_time = _observation_time(dataset, path)
+    start_offset = (temporal_support.observation_start - observation_time).total_seconds()
+    if not 0 <= start_offset < 60:
+        raise ValueError(f"Processed INSAT observation time conflicts with provenance for {path.name}")
+    observation_duration = (
+        temporal_support.observation_end - temporal_support.observation_start
+    ).total_seconds()
+    if not 0 <= observation_duration <= 30 * 60:
+        raise ValueError(f"Processed INSAT observation window conflicts for {path.name}")
+    if temporal_support.native_resolution_minutes != 30.0:
+        raise ValueError(f"Processed INSAT temporal resolution conflicts for {path.name}")
+    if temporal_support.availability_time is None:
+        raise ValueError(f"Processed INSAT availability time is missing for {path.name}")
+    try:
+        product_creation_time = _parse_insat_time(
+            dataset.attrs["product_creation_time"],
+            field="Product_Creation_Time",
+        )
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"Invalid processed INSAT product creation time in {path.name}") from exc
+    if temporal_support.availability_time != product_creation_time:
+        raise ValueError(f"Processed INSAT availability time conflicts for {path.name}")
+    if temporal_support.availability_time < temporal_support.observation_end:
+        raise ValueError(f"Processed INSAT availability time precedes observation end in {path.name}")
+    if asset.acquired_at is None or asset.acquired_at < temporal_support.availability_time:
+        raise ValueError(f"Processed INSAT acquisition time conflicts for {path.name}")
+
+    expected_record_id = f"sha256:{asset.sha256}"
+    for variable, (source_variable, _lookup) in INSAT_VARIABLES.items():
+        item = lineage[variable]
+        if item.status != "OBSERVED":
+            raise ValueError(f"Processed INSAT lineage status conflicts for {variable} in {path.name}")
+        if item.native_units != "digital count" or item.processed_units != "K":
+            raise ValueError(f"Processed INSAT lineage units conflict for {variable} in {path.name}")
+        if item.native_temporal_resolution_minutes != 30.0:
+            raise ValueError(
+                f"Processed INSAT lineage temporal resolution conflicts for {variable} in {path.name}"
+            )
+        if item.resampling_method != "none" or item.analysis_grid_resolution_km is not None:
+            raise ValueError(f"Processed INSAT lineage resampling conflicts for {variable} in {path.name}")
+        if item.source_record_ids != [expected_record_id]:
+            raise ValueError(f"Processed INSAT source record conflicts for {variable} in {path.name}")
+        try:
+            dataset_resolution = SpatialResolution.model_validate_json(
+                dataset[variable].attrs["native_resolution"]
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid processed INSAT native spatial metadata for {variable} in {path.name}"
+            ) from exc
+        if (
+            item.native_spatial_resolution != dataset_resolution
+            or item.native_spatial_resolution.crs != "MOSDAC file-supplied Mercator"
+            or item.native_spatial_resolution.native_description
+            != f"{source_variable} native L1C channel grid"
+        ):
+            raise ValueError(
+                f"Processed INSAT native spatial metadata conflicts for {variable} in {path.name}"
+            )
+    if lineage["infrared_brightness_temperature"].native_spatial_resolution.grid_spacing_km != 4.0:
+        raise ValueError(f"Processed INSAT TIR1 native spatial metadata conflicts in {path.name}")
 
 
 def _load_product(path: Path, dataset: xr.Dataset) -> IngestedProduct:
@@ -105,6 +190,14 @@ def _load_product(path: Path, dataset: xr.Dataset) -> IngestedProduct:
             raise ValueError(f"Processed INSAT lineage conflicts for {variable} in {path.name}")
         if f"sha256:{asset.sha256}" not in item.source_record_ids:
             raise ValueError(f"Processed INSAT source record conflicts for {variable} in {path.name}")
+
+    _validate_processed_provenance(
+        dataset,
+        path,
+        asset=asset,
+        lineage=lineage,
+        temporal_support=temporal_support,
+    )
 
     source_record_id = lineage["infrared_brightness_temperature"].source_record_ids[0]
     enriched = dataset.assign_coords(
@@ -151,6 +244,21 @@ def load_processed_insat_observations(
         seen.add(observation_time)
         products.append(_load_product(path, dataset))
     return products
+
+
+def insat_directory_revision(directory: Path | None) -> tuple[tuple[str, int, int], ...]:
+    if directory is None or not Path(directory).is_dir():
+        return ()
+    revision: list[tuple[str, int, int]] = []
+    for path in sorted(Path(directory).glob("*.nc*")):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        revision.append((path.name, stat.st_size, stat.st_mtime_ns))
+    return tuple(revision)
 
 
 def build_insat_replay_cube(
@@ -212,4 +320,8 @@ def build_insat_replay_cube(
     return cube
 
 
-__all__ = ["build_insat_replay_cube", "load_processed_insat_observations"]
+__all__ = [
+    "build_insat_replay_cube",
+    "insat_directory_revision",
+    "load_processed_insat_observations",
+]

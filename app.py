@@ -16,7 +16,10 @@ from storm_nowcast.alerts.engine import AlertEngine, AlertRule
 from storm_nowcast.confidence.framework import estimate_forecast_confidence
 from storm_nowcast.data.provenance import read_manifest
 from storm_nowcast.data.cmorph_cache import CmorphCache
-from storm_nowcast.data.insat_replay import build_insat_replay_cube
+from storm_nowcast.data.insat_replay import (
+    build_insat_replay_cube,
+    insat_directory_revision,
+)
 from storm_nowcast.data.sources import (
     CmorphSource,
     ImdLightningSource,
@@ -117,16 +120,6 @@ def load_event(path: str) -> xr.Dataset:
     return xr.load_dataset(path, engine="h5netcdf")
 
 
-def _insat_revision(path: Path) -> tuple[tuple[str, int, int], ...]:
-    if not path.is_dir():
-        return ()
-    return tuple(
-        (item.name, item.stat().st_size, item.stat().st_mtime_ns)
-        for item in sorted(path.glob("*.nc*"))
-        if item.is_file()
-    )
-
-
 @st.cache_resource(show_spinner=False)
 def load_insat_cube(
     path: str,
@@ -160,7 +153,7 @@ def event_insat_cube(dataset: xr.Dataset, record: EventLibraryRecord) -> xr.Data
         record.start_time,
         record.end_time,
         record.insat_max_age_minutes,
-        _insat_revision(path),
+        insat_directory_revision(path),
     )
 
 

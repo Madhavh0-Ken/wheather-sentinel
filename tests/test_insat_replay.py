@@ -71,7 +71,9 @@ def _write_processed_insat(
             "is_synthetic": 1,
             "crs": "EPSG:4326",
             "native_crs": "MOSDAC file-supplied Mercator",
-            "product_creation_time": (observation_time + timedelta(hours=6)).isoformat(),
+            "product_creation_time": (
+                observation_time + timedelta(hours=6)
+            ).replace(tzinfo=None).isoformat(),
             "format_contract": "MOSDAC INSAT-3D Data Products Format Document v1.1",
         },
     )
@@ -333,5 +335,138 @@ def test_processed_insat_loader_rejects_dataset_provenance_conflict(tmp_path):
 
     load_observations, _ = _loaders()
     with pytest.raises(ValueError, match="provider"):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+def test_processed_insat_loader_rejects_missing_required_wv_channel(tmp_path):
+    path = _write_processed_insat(
+        tmp_path,
+        filename="missing-wv.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+    with xr.open_dataset(path, engine="h5netcdf") as opened:
+        dataset = opened.drop_vars("water_vapour_brightness_temperature").load()
+    dataset.to_netcdf(path, engine="h5netcdf", mode="w")
+    _rewrite_provenance(
+        path,
+        lambda payload: payload["lineage"].pop(
+            "water_vapour_brightness_temperature"
+        ),
+    )
+
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match="variables are incomplete"):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+def _rewrite_provenance(path: Path, update) -> None:
+    provenance_path = path.with_suffix(path.suffix + ".provenance.json")
+    payload = json.loads(provenance_path.read_text(encoding="utf-8"))
+    update(payload)
+    provenance_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_processed_insat_loader_rejects_temporal_support_that_conflicts_with_dataset_time(
+    tmp_path,
+):
+    path = _write_processed_insat(
+        tmp_path,
+        filename="time-conflict.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+    _rewrite_provenance(
+        path,
+        lambda payload: payload["temporal_support"].update(
+            {
+                "observation_start": "2023-07-10T23:45:28Z",
+                "observation_end": "2023-07-11T00:12:22Z",
+            }
+        ),
+    )
+
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match="observation time conflicts"):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+def test_processed_insat_loader_rejects_product_creation_availability_conflict(tmp_path):
+    path = _write_processed_insat(
+        tmp_path,
+        filename="availability-conflict.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+    _rewrite_provenance(
+        path,
+        lambda payload: payload["temporal_support"].update(
+            {"availability_time": "2023-07-09T23:48:12Z"}
+        ),
+    )
+
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match="availability time conflicts"):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+def test_processed_insat_loader_rejects_observation_window_longer_than_native_scan(
+    tmp_path,
+):
+    path = _write_processed_insat(
+        tmp_path,
+        filename="window-conflict.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+    _rewrite_provenance(
+        path,
+        lambda payload: payload["temporal_support"].update(
+            {"observation_end": "2023-07-09T00:30:28Z"}
+        ),
+    )
+
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match="observation window conflicts"):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("status", "DERIVED", "status"),
+        ("native_temporal_resolution_minutes", 15.0, "temporal resolution"),
+        ("resampling_method", "bilinear", "resampling"),
+    ],
+)
+def test_processed_insat_loader_rejects_invalid_lineage_contract(
+    tmp_path, field, value, message
+):
+    path = _write_processed_insat(
+        tmp_path,
+        filename=f"lineage-{field}.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+
+    def update(payload):
+        payload["lineage"]["infrared_brightness_temperature"][field] = value
+
+    _rewrite_provenance(path, update)
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match=message):
+        load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
+
+
+def test_processed_insat_loader_rejects_crs_and_resolution_conflicts(tmp_path):
+    path = _write_processed_insat(
+        tmp_path,
+        filename="spatial-conflict.nc",
+        observation_time=EVENT_SOURCE_TIMES[0],
+    )
+
+    def update(payload):
+        item = payload["lineage"]["infrared_brightness_temperature"]
+        item["native_spatial_resolution"]["grid_spacing_km"] = 8.0
+        item["native_spatial_resolution"]["crs"] = "EPSG:4326"
+
+    _rewrite_provenance(path, update)
+    load_observations, _ = _loaders()
+    with pytest.raises(ValueError, match="native spatial metadata"):
         load_observations(tmp_path, event_start=EVENT_START, event_end=EVENT_END)
 

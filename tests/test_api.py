@@ -115,6 +115,10 @@ def test_api_loads_event_scoped_real_insat_state_and_frame_metadata(tmp_path: Pa
     assert nowcast["insat_product"] == "3RIMG_L1C_ASIA_MER"
     assert nowcast["insat_source_file"] == "scan-0015.nc"
     assert nowcast["tracks"][0]["sensor_availability"]["SATELLITE"] == "AVAILABLE"
+    event_nowcast = client.get(
+        "/nowcast?event_id=fixture-event&frame=1&target_lat=30.1&target_lon=75.3"
+    ).json()
+    assert event_nowcast["insat_available"] is True
     sources = {item["source"]: item for item in client.get("/sources").json()}
     assert sources["ISRO MOSDAC INSAT"]["available"] is True
     events = client.get("/events").json()
@@ -122,6 +126,18 @@ def test_api_loads_event_scoped_real_insat_state_and_frame_metadata(tmp_path: Pa
         "NOAA CPC CMORPH V0.x RAW 8km-30min",
         "ISRO/SAC MOSDAC INSAT-3DR 3RIMG_L1C_ASIA_MER",
     ]
+
+    for path in insat_dir.glob("*.nc*"):
+        path.unlink()
+
+    event_query = "?event_id=fixture-event&frame=1&target_lat=30.1&target_lon=75.3"
+    assert client.get("/nowcast" + event_query).json()["insat_available"] is False
+    event_sources = {
+        item["source"]: item
+        for item in client.get("/sources?event_id=fixture-event").json()
+    }
+    assert event_sources["ISRO MOSDAC INSAT"]["available"] is False
+    assert client.get("/nowcast?frame=1").json()["insat_available"] is False
 
 
 def test_api_service_override_remains_insat_unavailable_without_local_file_lookup():

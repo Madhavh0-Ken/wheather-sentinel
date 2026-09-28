@@ -129,6 +129,7 @@ def test_l1c_reader_decodes_lut_geolocation_time_missing_values_and_lineage(tmp_
     assert "IMG_TIR1_TEMP" in " ".join(lineage.processing_steps)
     assert product.asset.sha256 and product.asset.is_synthetic is True
     assert product.asset.source.product == "3RIMG_L1C_ASIA_MER"
+    assert product.dataset.attrs["verification_status"] == "verified with authorized real file"
 
 
 def test_l1c_reader_labels_wv_channel_as_brightness_temperature_not_humidity(tmp_path):

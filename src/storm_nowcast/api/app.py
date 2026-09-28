@@ -15,6 +15,8 @@ from storm_nowcast.api.dependencies import (
 )
 from storm_nowcast.config import PROJECT_ROOT, Settings, load_settings
 from storm_nowcast.data.cmorph_cache import CmorphCache
+from storm_nowcast.data.insat_replay import insat_directory_revision
+from storm_nowcast.data.provenance import sha256_file
 from storm_nowcast.data.sources import (
     CmorphSource,
     ImdLightningSource,
@@ -51,7 +53,10 @@ def create_app(
         configured,
     )
     default_service: AnalysisService | None = service_override
-    selected_services: dict[tuple[str, str], AnalysisService] = {}
+    default_service_revision: tuple[str, tuple[tuple[str, int, int], ...]] | None = None
+    selected_services: dict[
+        tuple[str, str, tuple[tuple[str, int, int], ...]], AnalysisService
+    ] = {}
 
     application = FastAPI(
         title="StormNowcast analysis API",
@@ -84,21 +89,38 @@ def create_app(
         return JSONResponse(status_code=status_by_code[exc.code], content=exc.as_dict())
 
     def service(event_id: str | None = None) -> AnalysisService:
-        nonlocal default_service
+        nonlocal default_service, default_service_revision
         if event_id is None:
-            if default_service is not None:
+            if service_override is not None:
+                return service_override
+            if not configured.data.processed_event.is_file():
+                try:
+                    return load_analysis_service(configured, catalog)
+                except EventDataUnavailable as exc:
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
+            event_checksum = sha256_file(configured.data.processed_event)
+            satellite_revision: tuple[tuple[str, int, int], ...] = ()
+            for record in catalog.events:
+                if record.data_path.resolve() == configured.data.processed_event.resolve():
+                    satellite_revision = insat_directory_revision(record.insat_data_path)
+                    break
+            revision = (event_checksum, satellite_revision)
+            if default_service is not None and default_service_revision == revision:
                 return default_service
             try:
                 default_service = load_analysis_service(configured, catalog)
             except EventDataUnavailable as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
+            default_service_revision = revision
             return default_service
         if service_override is not None and event_id == service_override.event_id:
             return service_override
         try:
-            _, checksum = repository_event_identity(repository, event_id)
-            key = (event_id, checksum)
+            record, checksum = repository_event_identity(repository, event_id)
+            key = (event_id, checksum, insat_directory_revision(record.insat_data_path))
             if key not in selected_services:
+                for stale in [item for item in selected_services if item[0] == event_id]:
+                    selected_services.pop(stale, None)
                 selected_services[key] = load_repository_analysis_service(
                     configured, repository, event_id
                 )[0]
@@ -169,9 +191,8 @@ def create_app(
     @application.post("/events/prepare")
     def prepare_event(request: CustomEventRequest) -> dict:
         prepared = builder.prepare(request)
-        selected_services.pop(
-            (prepared.manifest.event_id, prepared.manifest.event_sha256), None
-        )
+        for key in [key for key in selected_services if key[0] == prepared.manifest.event_id]:
+            selected_services.pop(key, None)
         return {
             "created": prepared.created,
             "reused": prepared.reused,

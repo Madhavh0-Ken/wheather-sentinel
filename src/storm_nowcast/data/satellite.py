@@ -268,7 +268,7 @@ def load_insat3dr_l1c_asia_mer(
             "native_crs": native_crs,
             "product_creation_time": product_creation_time,
             "format_contract": "MOSDAC INSAT-3D Data Products Format Document v1.1",
-            "verification_status": "documented schema; authorized real-file verification pending",
+            "verification_status": "verified with authorized real file",
         }
     )
     return IngestedProduct(

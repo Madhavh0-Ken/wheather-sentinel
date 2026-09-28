@@ -13,7 +13,7 @@ never silently imputed.
 | Sensor | Provider/product | Reader | Real event connected | Blocker |
 |---|---|---|---|---|
 | Rainfall | NOAA CPC CMORPH V0.x RAW 8km-30min | Product-specific binary parser | Yes | None for cached replay |
-| Satellite | ISRO/SAC MOSDAC `3RIMG_L1C_ASIA_MER` | Product-specific documented-schema HDF reader | No | Registered MOSDAC download required |
+| Satellite | ISRO/SAC MOSDAC `3RIMG_L1C_ASIA_MER` | Product-specific real-file-verified HDF reader | Yes for the built-in event | Authorized local files remain required for other events |
 | Radar | IMD DWR | Explicit generic CF HDF/NetCDF adapter | No | Authorized product file and exact format required |
 | Lightning | IMD | Explicit point CSV adapter | No | Authorized event file and column documentation required |
 | Surface | IMD AWS/ARG | Explicit point CSV adapter | No | Authorized station file and units required |
@@ -27,13 +27,14 @@ metadata, uses file-supplied Mercator projection parameters, and decodes:
 
 - `IMG_TIR1` counts through `IMG_TIR1_TEMP` to observed infrared brightness
   temperature in kelvin, with native resolution taken from the channel metadata.
-- Optional `IMG_WV` counts through `IMG_WV_TEMP` to observed water-vapour-channel
+- `IMG_WV` counts through `IMG_WV_TEMP` to observed water-vapour-channel
   brightness temperature in kelvin. This is not labelled as humidity.
 
 Fill values remain missing, checksum provenance is retained, and derived cloud-top
 cooling is calculated only from consecutive kelvin brightness-temperature fields.
-The reader is tested against the official published schema but is not called
-real-file verified until an authorized MOSDAC file is processed.
+The reader and replay path are verified against authorized real MOSDAC files. The
+built-in event requires both calibrated TIR1 and WV fields; generic reader use can
+still decode a TIR1-only source file outside that replay contract.
 
 Exact acquisition instructions are in
 `data/manual/mosdac_satellite/README.md` and official references are in
@@ -48,5 +49,5 @@ observations remain point tables until an explicit aggregation is requested.
 
 Each multi-sensor storm twin carries a sensor availability mask. Convective initiation,
 hazards, confidence, and nowcasts may use only evidence marked available at the
-analysis time. The current real replay therefore remains rainfall-only and correctly
-gates satellite/radar/lightning-dependent outputs as unavailable.
+analysis time. The current real replay carries rainfall plus causal INSAT evidence;
+radar, lightning, surface, NWP, hail, and downburst states remain unavailable.

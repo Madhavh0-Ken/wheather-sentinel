@@ -2,7 +2,7 @@
 
 Status date: 2026-09-28. Protected fallback: git commit `3d0a01a`.
 
-Latest verification in this checkout: **210 tests passed, 0 failed, 1
+Latest verification in this checkout: **218 tests passed, 0 failed, 1
 platform-dependent symlink test skipped** after the real INSAT replay integration.
 Built-in and offline custom-event smoke paths plus Streamlit/API health are part of
 the final handoff checklist.
